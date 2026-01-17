@@ -149,27 +149,21 @@ void dali::DaliLight::write_state(light::LightState *state) {
 
     state->current_values_as_binary(&on);
     if (!on) {
-        // Short cut: send power off command
-        bus->dali.lamp.setBrightness(address_, 0); // fade
+        DALI_LOGI("UI -> TURN OFF (short addr=%.2x)", this->address_);
+        bus->dali.lamp.setBrightness(address_, 0); // fade / off
         return;
     }
 
     if (tc_supported_) {
         state->current_values_as_ct(&color_temperature, &brightness);
 
-        // Map temperature 0..1 to reported TC coolest/warmest mireds
         float color_temperature_mired = (color_temperature * (dali_tc_warmest_ - dali_tc_coolest_)) + dali_tc_coolest_;
-
         uint16_t dali_color_temperature = static_cast<uint16_t>(color_temperature_mired);
 
-        // Only update if temperature has changed, to allow faster brightness changes
         if (dali_color_temperature != last_temperature) {
             last_temperature = dali_color_temperature;
-
-            ESP_LOGD(TAG, "DALI[%d] Tc=%d", address_, dali_color_temperature);
-
-            // IMPORTANT: Do not set start_fade (activate), or the color temperature fade will
-            // be cancelled when we next call setBrightness, and no color change will occur.
+            DALI_LOGI("UI -> SET CT addr=%.2x tc=%u", this->address_, (unsigned)dali_color_temperature);
+            // IMPORTANT: not starting fade here to allow brightness updates to work
             bus->dali.color.setColorTemperature(address_, dali_color_temperature, false);
         }
     } else {
@@ -180,6 +174,6 @@ void dali::DaliLight::write_state(light::LightState *state) {
     if (dali_brightness < 1) dali_brightness = 1;
     if (dali_brightness > 254) dali_brightness = 254;
 
-    ESP_LOGD(TAG, "DALI[%d] B=%.2f (%d)", address_, brightness, dali_brightness);
+    DALI_LOGI("UI -> SET BRIGHTNESS addr=%.2x brightness=%.2f -> dali=%d", this->address_, brightness, dali_brightness);
     bus->dali.lamp.setBrightness(address_, (uint8_t)dali_brightness);
 }
