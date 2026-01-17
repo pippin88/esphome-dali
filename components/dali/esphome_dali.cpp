@@ -1,95 +1,104 @@
-
 #include <esphome.h>
 #include <esp_task_wdt.h>
-#include <driver/gpio.h>
 #include "esphome_dali.h"
 #include "esphome_dali_light.h"
+
+// Use the qqqlab/Waveshare DALI driver library (already present in repo)
 #include "DALI_Lib.h"
+extern Dali dali; // global object defined by DALI_Lib
 
 using namespace esphome;
 using namespace dali;
 
-// Static variables for ISR access
-static volatile gpio_num_t s_tx_gpio = GPIO_NUM_NC;
-static volatile gpio_num_t s_rx_gpio = GPIO_NUM_NC;
-static DaliBusComponent* s_bus_component = nullptr;
+// Default debug macro (can be overridden at compile time)
+#ifndef DALI_DEBUG_RXTX
+#define DALI_DEBUG_RXTX 0
+#endif
+static const bool DEFAULT_DEBUG_LOG_RXTX = (DALI_DEBUG_RXTX != 0);
 
-// ISR-safe GPIO wrapper functions for DALI library
-static bool IRAM_ATTR bus_is_high() {
-    if (s_rx_gpio == GPIO_NUM_NC) return true;
-    return gpio_get_level(s_rx_gpio) != 0;
+// Use confirmed raw pins for ISR-level gpio access to avoid relying on GPIOPin internals.
+// These match the Waveshare example: TX=17, RX=14
+static constexpr gpio_num_t RAW_TX_GPIO = (gpio_num_t)17;
+static constexpr gpio_num_t RAW_RX_GPIO = (gpio_num_t)14;
+
+// IRAM ISR: call the DALI library timer() at the required sampling frequency
+static void IRAM_ATTR dali_timer_isr() {
+    ::dali.timer();
 }
-
-static void IRAM_ATTR bus_set_high() {
-    if (s_tx_gpio == GPIO_NUM_NC) return;
-    gpio_set_level(s_tx_gpio, 1);
-}
-
-static void IRAM_ATTR bus_set_low() {
-    if (s_tx_gpio == GPIO_NUM_NC) return;
-    gpio_set_level(s_tx_gpio, 0);
-}
-
-// Timer constants (kept for reference but replaced with library implementation)
-#define QUARTER_BIT_PERIOD 208
-#define HALF_BIT_PERIOD 416
-#define BIT_PERIOD 833
 
 void DaliBusComponent::setup() {
-    // Store reference for ISR access
-    s_bus_component = this;
-    
-    // Get raw GPIO numbers for ISR-safe access
+    const bool DEBUG_LOG_RXTX = this->m_debug_rxtx ? true : DEFAULT_DEBUG_LOG_RXTX;
+
+    // Configure TX pin via generated GPIOPin wrapper
     if (m_txPin) {
-        m_tx_gpio_num = (gpio_num_t)m_txPin->get_pin();
-        s_tx_gpio = m_tx_gpio_num;
-        
-        // Configure TX pin as output
         m_txPin->pin_mode(gpio::Flags::FLAG_OUTPUT);
-        // Ensure default output state: HIGH = bus released (idle)
+        // Ensure release-high idle (adapter expects HIGH to release)
         m_txPin->digital_write(HIGH);
-        gpio_set_level(m_tx_gpio_num, 1);
     }
 
-    // Configure RX pin with user-specified pull mode
+    // Configure RX pin with selected pull
     if (m_rxPin) {
-        m_rx_gpio_num = (gpio_num_t)m_rxPin->get_pin();
-        s_rx_gpio = m_rx_gpio_num;
-        
-        gpio::Flags rx_flags = gpio::Flags::FLAG_INPUT;
         switch (m_rx_pull) {
-            case RxPullMode::PULLUP:
-                rx_flags = rx_flags | gpio::Flags::FLAG_PULLUP;
-                DALI_LOGD("RX pin configured with PULLUP");
+            case RxPullMode::PULLUP_MODE:
+                m_rxPin->pin_mode(gpio::Flags::FLAG_INPUT | gpio::Flags::FLAG_PULLUP);
                 break;
-            case RxPullMode::PULLDOWN:
-                rx_flags = rx_flags | gpio::Flags::FLAG_PULLDOWN;
-                DALI_LOGD("RX pin configured with PULLDOWN");
+            case RxPullMode::PULLDOWN_MODE:
+                m_rxPin->pin_mode(gpio::Flags::FLAG_INPUT | gpio::Flags::FLAG_PULLDOWN);
                 break;
             case RxPullMode::NONE:
-                DALI_LOGD("RX pin configured with no pull");
+            default:
+                m_rxPin->pin_mode(gpio::Flags::FLAG_INPUT);
                 break;
         }
-        m_rxPin->pin_mode(rx_flags);
     }
 
-    // Initialize the DALI library with HAL callbacks
-    ::dali.begin(bus_is_high, bus_set_high, bus_set_low);
-    ::dali.set_debug(m_debug_rxtx);
-    
-    // Setup hardware timer at 9600 Hz (104.167 us period)
-    setup_timer();
+    DALI_LOGI("DALI bus ready (rx_pull=%d debug=%d)", (int)m_rx_pull, (int)DEBUG_LOG_RXTX);
 
-    DALI_LOGI("DALI bus ready (timer-driven, debug_rxtx=%d)", m_debug_rxtx);
+    // Start sampling timer at ~9600 Hz so the qqqlab driver can oversample Manchester
+    // Use Arduino wrapper available in this PlatformIO environment: timerBegin(frequency)
+    m_timer = timerBegin(9600);
+    if (m_timer) {
+        timerAttachInterrupt(m_timer, &dali_timer_isr);
+        DALI_LOGD("DALI sampling timer configured (9600 Hz)");
+    } else {
+        DALI_LOGW("Failed to start DALI sampling timer");
+    }
 
+    // Initialize qqqlab Dali library so it can use the bus HAL via the callbacks.
+    // The library's begin() expects function pointers; we'll provide small wrappers that use raw gpio for ISR-safety.
+    // Define the three callbacks as C functions referencing raw gpio pins:
+
+    static auto bus_is_high_cb = []() -> uint8_t {
+        // Use raw gpio_get_level (ESP-IDF) which is ISR safe
+        return gpio_get_level(RAW_RX_GPIO) ? 1 : 0;
+    };
+    static auto bus_set_low_cb = []() {
+        gpio_set_level(RAW_TX_GPIO, 0);
+    };
+    static auto bus_set_high_cb = []() {
+        gpio_set_level(RAW_TX_GPIO, 1);
+    };
+
+    // The Dali::begin takes function pointers; get C-style pointers to small static functions:
+    // Create wrapper functions with C linkage so we can pass their addresses.
+    // (We do this once and pass the pointers.)
+    // Implement small static functions:
+    static uint8_t IRAM_ATTR dali_bus_is_high_wrapper() {
+        return gpio_get_level(RAW_RX_GPIO) ? 1 : 0;
+    }
+    static void IRAM_ATTR dali_bus_set_low_wrapper() {
+        gpio_set_level(RAW_TX_GPIO, 0);
+    }
+    static void IRAM_ATTR dali_bus_set_high_wrapper() {
+        gpio_set_level(RAW_TX_GPIO, 1);
+    }
+
+    // Initialize the library with the ISR-safe wrappers
+    ::dali.begin(&dali_bus_is_high_wrapper, &dali_bus_set_high_wrapper, &dali_bus_set_low_wrapper);
+
+    // Discovery (optional)
     if (m_discovery) {
-        // Optional: reset devices on the bus so we are in a known-good state.
-        if (false) {
-            this->resetBus();
-            esp_task_wdt_reset();
-        }
-
-        if (dali.bus_manager.isControlGearPresent()) {
+        if (::dali.bus_manager.isControlGearPresent()) {
             DALI_LOGD("Detected control gear on bus");
         } else {
             DALI_LOGW("No control gear detected on bus!");
@@ -110,54 +119,143 @@ void DaliBusComponent::setup() {
                 continue;
             }
 
-            // First-level probe: isDevicePresent (requires a specific affirmative reply)
+            // First-level probe: isDevicePresent (uses dali library)
             if (!dali.isDevicePresent(short_addr)) {
                 DALI_LOGD("No device at short address %.2x (no affirmative present reply)", short_addr);
                 continue;
             }
 
-            // Second-level confirmation: query a capability (min level).
-            // A noisy RX that returns all 1s will often return 0xFF for queries;
-            // treat values outside the valid 0..254 range as non-present.
+            // Confirm via min-level query
             int16_t min_level = dali.lamp.getMinLevel(short_addr);
             if (min_level < 0 || min_level > 254) {
                 DALI_LOGW("Probe at short address %.2x returned invalid min_level=%d - ignoring (likely noise)", short_addr, (int)min_level);
                 continue;
             }
 
-            // We have a confirmed device
             DALI_LOGI("Found device at short address %.2x (min=%d)", short_addr, (int)min_level);
 
-            // If already known, warn of duplicate
             if (m_addresses[short_addr]) {
                 DALI_LOGW("Duplicate or already-registered short address detected: %.2x", short_addr);
                 duplicate_detected = true;
             } else {
-                // Try to obtain the device random/long address (C4/C3/C2)
                 uint32_t long_addr = dali.getRandomAddress(short_addr);
-
-                // Mark discovered; use long_addr when available
                 m_addresses[short_addr] = (long_addr != 0 ? long_addr : 0xFFFFFF);
 
                 int16_t max_level = dali.lamp.getMaxLevel(short_addr);
                 DALI_LOGI("  short=%.2x long=0x%.6x min=%d max=%d", short_addr, long_addr, (int)min_level, (int)max_level);
 
-                // Create dynamic light component using long_addr if available, else short_addr fallback.
                 create_light_component(short_addr, long_addr);
             }
 
-            // Small settle delay
             delay(10);
         }
 
         if (duplicate_detected) {
             DALI_LOGW("Duplicate short addresses detected on the bus!");
-            DALI_LOGW("  Devices may report inconsistent capabilities.");
-            DALI_LOGW("  You should fix your address assignments.");
         }
 
         DALI_LOGI("Device discovery finished.");
     }
+}
+
+void DaliBusComponent::resetBus() {
+    DALI_LOGD("Resetting bus");
+    // release
+    if (m_txPin) m_txPin->digital_write(HIGH);
+    delay(1000);
+    if (m_txPin) m_txPin->digital_write(LOW);
+}
+
+// send a forward frame (address + data) using the qqqlab library
+void DaliBusComponent::sendForwardFrame(uint8_t address, uint8_t data) {
+    uint8_t bytes[2];
+    bytes[0] = address;
+    bytes[1] = data;
+
+    if (m_debug_rxtx) {
+        DALI_LOGD("TX: addr=0x%02x data=0x%02x (via library tx_wait)", address, data);
+    }
+
+    // Use the library's blocking transmit (16 bits)
+    int rv = ::dali.tx_wait(bytes, 16, 500);
+    if (rv != DALI_OK) {
+        DALI_LOGW("dali.tx_wait returned %d", rv);
+    }
+}
+
+// wait for backward frame (reply) using the library's rx() function
+uint8_t DaliBusComponent::receiveBackwardFrame(unsigned long timeout_ms) {
+    unsigned long start = millis();
+    uint8_t rxbuf[4];
+
+    while (millis() - start < timeout_ms) {
+        int rv = ::dali.rx(rxbuf);
+        switch (rv) {
+            case 0:
+                // nothing yet
+                break;
+            case 1:
+                // receiving in progress; allow more time
+                break;
+            case 2:
+                // decode error
+                DALI_LOGW("dali.rx returned decode error");
+                return 0;
+            case 8:
+                // backward frame (8 bits) decoded
+                if (m_debug_rxtx) DALI_LOGD("RX (back): 0x%02x", rxbuf[0]);
+                return rxbuf[0];
+            case 16:
+                // forward frame was observed - ignore for backward read
+                if (m_debug_rxtx) DALI_LOGD("RX: forward frame observed while waiting for backward reply");
+                break;
+            default:
+                // other unexpected values - continue
+                break;
+        }
+        delayMicroseconds(100); // small yield so we don't spin too tight
+    }
+
+    // timeout
+    if (m_debug_rxtx) DALI_LOGD("receiveBackwardFrame timeout");
+    return 0;
+}
+
+void DaliBusComponent::loop() { }
+
+void DaliBusComponent::dump_config() {
+    DALI_LOGI("DALI bus config: rx_pull=%d debug=%d", (int)m_rx_pull, (int)m_debug_rxtx);
+}
+
+/* Keep the existing helpers in case other code paths rely on them (bit-bang fallback).
+   They are not used for backward-frame decoding anymore. */
+
+void DaliBusComponent::writeBit(bool bit) {
+    // For compatibility we keep previous bit-bang semantics (not used by library)
+    if (m_txPin)
+        m_txPin->digital_write(bit ? LOW : HIGH);
+    delayMicroseconds(416);
+    if (m_txPin)
+        m_txPin->digital_write(bit ? HIGH : LOW);
+    delayMicroseconds(416);
+}
+
+void DaliBusComponent::writeByte(uint8_t b) {
+    for (int i = 0; i < 8; i++) {
+        writeBit(b & 0x80);
+        b <<= 1;
+    }
+}
+
+uint8_t DaliBusComponent::readByte() {
+    // Deprecated for backward frames - use library's rx()
+    uint8_t byte = 0;
+    for (int i = 0; i < 8; i++) {
+        byte <<= 1;
+        byte |= (m_rxPin ? m_rxPin->digital_read() : 0);
+        delayMicroseconds(833);
+    }
+    return byte;
 }
 
 void DaliBusComponent::create_light_component(short_addr_t short_addr, uint32_t long_addr) {
@@ -169,7 +267,6 @@ void DaliBusComponent::create_light_component(short_addr_t short_addr, uint32_t 
     char* name = new char[MAX_STR_LEN];
     char* id = new char[MAX_STR_LEN];
 
-    // Name and id include the long address when available for uniqueness
     if (long_addr != 0) {
         snprintf(name, MAX_STR_LEN, "DALI Light %.2x", short_addr);
         snprintf(id, MAX_STR_LEN, "dali_light_%.6x", long_addr);
@@ -177,7 +274,6 @@ void DaliBusComponent::create_light_component(short_addr_t short_addr, uint32_t 
         snprintf(name, MAX_STR_LEN, "DALI Light %.2x", short_addr);
         snprintf(id, MAX_STR_LEN, "dali_light_sa%.2x", short_addr);
     }
-    // NOTE: Not freeing these strings, they will be owned by LightState.
 
     auto* light_state = new light::LightState { dali_light };
     App.register_light(light_state);
@@ -192,108 +288,4 @@ void DaliBusComponent::create_light_component(short_addr_t short_addr, uint32_t 
 #else
     DALI_LOGE("Cannot add light component - not enabled");
 #endif
-}
-
-void DaliBusComponent::loop() { }
-
-void DaliBusComponent::dump_config() { }
-
-// Timer ISR that calls the DALI library's timer handler
-void IRAM_ATTR DaliBusComponent::timer_isr() {
-    if (s_bus_component) {
-        ::dali.timer();
-    }
-}
-
-// Timer configuration constants
-#define DALI_TIMER_NUM 0           // Hardware timer to use (0-3 on ESP32)
-#define DALI_TIMER_DIVIDER 80      // Divider for 1 MHz tick rate (80 MHz APB / 80 = 1 MHz)
-#define TIMER_TICKS_PER_SAMPLE 104 // Ticks for 104.167 microseconds (9600 Hz sampling)
-
-// Setup hardware timer at 9600 Hz (104.167 microseconds period)
-void DaliBusComponent::setup_timer() {
-    // Timer DALI_TIMER_NUM, divider 80 (1 MHz tick rate on 80 MHz APB clock)
-    m_timer = timerBegin(DALI_TIMER_NUM, DALI_TIMER_DIVIDER, true);
-    if (!m_timer) {
-        DALI_LOGE("Failed to initialize timer!");
-        return;
-    }
-    
-    // Attach ISR
-    timerAttachInterrupt(m_timer, &DaliBusComponent::timer_isr, true);
-    
-    // Set alarm to trigger every 104.167 microseconds (9600 Hz)
-    // 104.167 us = 104 ticks at 1 MHz
-    timerAlarmWrite(m_timer, TIMER_TICKS_PER_SAMPLE, true);
-    timerAlarmEnable(m_timer);
-    
-    DALI_LOGD("Hardware timer configured at 9600 Hz");
-}
-
-// Legacy bit-bang functions kept for reference (not used with library)
-void DaliBusComponent::writeBit(bool bit) {
-    // NOTE: Kept for compatibility but not used with timer-driven library
-    bit = !bit;
-    if (m_txPin)
-        m_txPin->digital_write(bit ? LOW : HIGH);
-    delayMicroseconds(HALF_BIT_PERIOD-6);
-    if (m_txPin)
-        m_txPin->digital_write(bit ? HIGH : LOW);
-    delayMicroseconds(HALF_BIT_PERIOD-6);
-}
-
-void DaliBusComponent::writeByte(uint8_t b) {
-    // NOTE: Kept for compatibility but not used with timer-driven library
-    for (int i = 0; i < 8; i++) {
-        writeBit(b & 0x80);
-        b <<= 1;
-    }
-}
-
-uint8_t DaliBusComponent::readByte() {
-    // NOTE: Kept for compatibility but not used with timer-driven library
-    uint8_t byte = 0;
-    for (int i = 0; i < 8; i++) {
-        byte <<= 1;
-        byte |= (m_rxPin ? m_rxPin->digital_read() : 0);
-        delayMicroseconds(BIT_PERIOD);
-    }
-    return byte;
-}
-
-void DaliBusComponent::resetBus() {
-    DALI_LOGD("Resetting bus");
-    bus_set_high();
-    delay(1000);
-    bus_set_low();
-}
-
-void DaliBusComponent::sendForwardFrame(uint8_t address, uint8_t data) {
-    // Use DALI library tx_wait function instead of bit-banging
-    if (m_debug_rxtx) {
-        DALI_LOGD("TX: addr=0x%02x data=0x%02x", address, data);
-    }
-    
-    // Use library's timer-driven transmission
-    ::dali.tx_wait(address, data, 50);
-}
-
-uint8_t DaliBusComponent::receiveBackwardFrame(unsigned long timeout_ms) {
-    // Use DALI library rx function for passive monitoring
-    uint8_t data = 0;
-    
-    // Wait for a backward frame with timeout
-    unsigned long startTime = millis();
-    while (millis() - startTime < timeout_ms) {
-        if (::dali.rx(&data) == 8) {
-            if (m_debug_rxtx) {
-                DALI_LOGD("RX: 0x%02x", data);
-            }
-            return data;
-        }
-        delay(1);
-    }
-    
-    // Timeout - no frame received
-    return 0;
 }
