@@ -10,13 +10,27 @@ using namespace esphome;
 using namespace dali;
 
 void DaliBusComponent::setup() {
-    m_txPin->pin_mode(gpio::Flags::FLAG_OUTPUT);
-    m_rxPin->pin_mode(gpio::Flags::FLAG_INPUT);
+    // Modern pin API: ensure correct flags are used
+    // Keep TX as output
+    if (m_txPin) {
+        m_txPin->pin_mode(gpio::Flags::FLAG_OUTPUT);
+        // Ensure output is low by default (inverted logic in this component)
+        m_txPin->digital_write(LOW);
+    }
+
+    // On some newer ESP32 variants (S3), the RX pin can float unless an internal
+    // pull-up is enabled. Use INPUT + PULLUP to avoid floating values. If you
+    // find that INPUT_PULLUP prevents feedback on your hardware, consider
+    // an external pull-down or wiring changes.
+    if (m_rxPin) {
+        m_rxPin->pin_mode(gpio::Flags::FLAG_INPUT | gpio::Flags::FLAG_PULLUP);
+    }
+
     DALI_LOGI("DALI bus ready");
 
     if (m_discovery) {
         // Optional: reset devices on the bus so we are in a known-good state.
-        // Can help if devices are not responding to anything.
+        // Can help if devices are not responding to anything
         if (false) {
             this->resetBus();
             esp_task_wdt_reset();
@@ -27,12 +41,6 @@ void DaliBusComponent::setup() {
         } else {
             DALI_LOGW("No control gear detected on bus!");
         }
-
-        // for (int i = 0; i <= ADDR_SHORT_MAX; i++) {
-        //     if (m_addresses[i] != 0) {
-        //         DALI_LOGD("Static config addr: %.2x", i);
-        //     }
-        // }
 
         if (this->m_initialize_addresses != DaliInitMode::DiscoverOnly) {
             if (this->m_initialize_addresses == DaliInitMode::InitializeAll) {
@@ -70,41 +78,6 @@ void DaliBusComponent::setup() {
             delay(1); // yield to ESP stack
             esp_task_wdt_reset();
 
-            // if (short_addr == 0xFF) {
-            //     if (this->m_initialize_addresses) {
-                    
-            //         //dali.bus_manager.programShortAddress(count);
-            //         // short_addr_t new_addr = 1;
-            //         // programShortAddress(new_addr);
-            
-            //         // port.sendSpecialCommand(DaliSpecialCommand::QUERY_SHORT_ADDRESS, 0);
-            //         // out_short_addr = port.receiveBackwardFrame();
-            
-            //         // if (out_short_addr != new_addr) {
-            //         //     DALI_LOGE("Could not program short address");
-            //         //     out_short_addr = 0xFF;
-            //         // }
-
-            //         short_addr_t new_addr = count;
-
-            //         dali.bus_manager.programShortAddress(new_addr);
-
-            //         dali.port.sendSpecialCommand(DaliSpecialCommand::QUERY_SHORT_ADDRESS, 0);
-            //         short_addr = dali.port.receiveBackwardFrame();
-            
-            //         if (short_addr != new_addr) {
-            //             DALI_LOGE("  Could not program short address");
-            //             continue;
-            //         }
-            //     }
-            //     else {
-            //         // You'll need to assign a short address before the device will respond to commands.
-            //         // However it will still respond to BROADCAST brightness updates...
-            //         DALI_LOGW("  No short address assigned!");
-            //         continue;
-            //     }
-            // }
-
             if (short_addr <= ADDR_SHORT_MAX) {
                 DALI_LOGI("  Device %.6x @ %.2x", long_addr, short_addr);
 
@@ -113,8 +86,6 @@ void DaliBusComponent::setup() {
                     if (m_initialize_addresses == DaliInitMode::DiscoverOnly) {
                         DALI_LOGW("  WARNING: Duplicate short address detected!");
                         duplicate_detected = true;
-                        // TODO: Maybe don't register the component in this case?
-                        // Brightness control will work, but reported capabilities will not be correct.
                     }
                     else {
                         // Assign a new address for this
@@ -144,8 +115,6 @@ void DaliBusComponent::setup() {
             else if (short_addr == 0xFF) {
                 if (m_initialize_addresses == DaliInitMode::DiscoverOnly) {
                     DALI_LOGI("  Device %.6x @ --", long_addr);
-                    // You'll need to assign a short address before the device will respond to commands.
-                    // However it will still respond to BROADCAST brightness updates...
                     DALI_LOGW("  No short address assigned!");
                     continue;
                 }
@@ -219,9 +188,11 @@ void DaliBusComponent::dump_config() {
 void DaliBusComponent::writeBit(bool bit) {
     // NOTE: output is inverted - HIGH will pull the bus to 0V (logic low)
     bit = !bit;
-    m_txPin->digital_write(bit ? LOW : HIGH);
+    if (m_txPin)
+        m_txPin->digital_write(bit ? LOW : HIGH);
     delayMicroseconds(HALF_BIT_PERIOD-6);
-    m_txPin->digital_write(bit ? HIGH : LOW);
+    if (m_txPin)
+        m_txPin->digital_write(bit ? HIGH : LOW);
     delayMicroseconds(HALF_BIT_PERIOD-6);
 }
 
@@ -236,7 +207,7 @@ uint8_t DaliBusComponent::readByte() {
     uint8_t byte = 0;
     for (int i = 0; i < 8; i++) {
         byte <<= 1;
-        byte |= m_rxPin->digital_read();
+        byte |= (m_rxPin ? m_rxPin->digital_read() : 0);
         delayMicroseconds(BIT_PERIOD); // 1/1200 seconds
     }
     return byte;
@@ -244,67 +215,9 @@ uint8_t DaliBusComponent::readByte() {
 
 void DaliBusComponent::resetBus() {
     DALI_LOGD("Resetting bus");
-    m_txPin->digital_write(HIGH);
+    if (m_txPin)
+        m_txPin->digital_write(HIGH);
     delay(1000);
-    m_txPin->digital_write(LOW);
-}
-
-void DaliBusComponent::sendForwardFrame(uint8_t address, uint8_t data) {
-    if (DEBUG_LOG_RXTX) {
-        DALI_LOGD("TX: %02x %02x", address, data);
-        delayMicroseconds(BIT_PERIOD*8);
-        //Serial.print("TX: "); Serial.print(address, HEX); Serial.print(" "); Serial.println(data, HEX);
-    }
-
-    {
-        // This is timing critical
-        InterruptLock lock;
-
-        writeBit(1); // START bit
-        writeByte(address);
-        writeByte(data);
+    if (m_txPin)
         m_txPin->digital_write(LOW);
-    }
-
-    // Non critical delay
-    delayMicroseconds(HALF_BIT_PERIOD*2);
-    delayMicroseconds(BIT_PERIOD*4); // Optional, for clarity in scope trace
-}
-
-uint8_t DaliBusComponent::receiveBackwardFrame(unsigned long timeout_ms) {
-    uint8_t data;
-
-    unsigned long startTime = millis();
-    uint32_t startMicros = micros();
-
-    // Wait for START bit (timing critical)
-    // TODO: Need a better way to wait for this that doens't block the CPU
-    while (m_rxPin->digital_read() == LOW) {
-        if (millis() - startTime >= timeout_ms) {
-            //Serial.println("No reply");
-            if (DEBUG_LOG_RXTX) {
-                DALI_LOGD("RX: 00 (NACK)");
-            }
-            return 0;
-        }
-    }
-
-    {
-        // This is timing critical
-        InterruptLock lock;
-
-        delayMicroseconds(BIT_PERIOD); // Wait for first data bit
-        delayMicroseconds(QUARTER_BIT_PERIOD); // Wait a quater bit period to sample middle of first half bit
-        data = readByte();
-        delayMicroseconds(BIT_PERIOD*2); // Wait for STOP bits
-    }
-
-    //Serial.print("RX: "); Serial.println(data, HEX);
-    if (DEBUG_LOG_RXTX) {
-        DALI_LOGD("RX: %02x", data);
-    }
-
-    // Minimum time before we can send another forward frame
-    delayMicroseconds(BIT_PERIOD*8); 
-    return data;
 }
