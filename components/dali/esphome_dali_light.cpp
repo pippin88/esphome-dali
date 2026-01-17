@@ -1,4 +1,4 @@
-url=https://github.com/pippin88/esphome-dali/blob/main/components/dali/esphome_dali_light.cpp
+
 #include <esphome.h>
 #include "esphome_dali_light.h"
 #include "esphome/core/log.h"
