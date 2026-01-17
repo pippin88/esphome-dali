@@ -1,5 +1,6 @@
 #include "DALI_Lib.h"
 #include "dali.h"  // For logging macros
+#include <Arduino.h>  // For millis() and delay()
 
 // Global instance
 Dali dali;
@@ -73,7 +74,8 @@ void Dali::tx_timer_handler() {
             
         case TX_DATA_BIT_HIGH:
         case TX_DATA_BIT_LOW: {
-            // Transmit 16 bits (8 addr + 8 data)
+            // Transmit 16 bits (8 addr + 8 data) using Manchester encoding
+            // Manchester: logical 1 = HIGH then LOW, logical 0 = LOW then HIGH
             uint16_t frame = ((uint16_t)m_tx_addr << 8) | m_tx_data;
             bool bit = (frame >> (15 - m_tx_bit_index)) & 1;
             
@@ -151,6 +153,7 @@ void Dali::rx_timer_handler() {
         case RX_DATA_BIT:
             m_rx_sample_count++;
             
+            // DALI backward frames use simple NRZ encoding (not Manchester)
             // Sample in the middle of the bit period (after 4 samples)
             if (m_rx_sample_count == DALI_HALF_BIT_SAMPLES) {
                 m_rx_data = (m_rx_data << 1) | (bus_high ? 1 : 0);

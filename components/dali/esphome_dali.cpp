@@ -200,13 +200,20 @@ void DaliBusComponent::dump_config() { }
 
 // Timer ISR that calls the DALI library's timer handler
 void IRAM_ATTR DaliBusComponent::timer_isr() {
-    ::dali.timer();
+    if (s_bus_component) {
+        ::dali.timer();
+    }
 }
+
+// Timer configuration constants
+#define DALI_TIMER_NUM 0           // Hardware timer to use (0-3 on ESP32)
+#define DALI_TIMER_DIVIDER 80      // Divider for 1 MHz tick rate (80 MHz APB / 80 = 1 MHz)
+#define TIMER_TICKS_PER_SAMPLE 104 // Ticks for 104.167 microseconds (9600 Hz sampling)
 
 // Setup hardware timer at 9600 Hz (104.167 microseconds period)
 void DaliBusComponent::setup_timer() {
-    // Timer 0, divider 80 (1 MHz tick rate on 80 MHz APB clock)
-    m_timer = timerBegin(0, 80, true);
+    // Timer DALI_TIMER_NUM, divider 80 (1 MHz tick rate on 80 MHz APB clock)
+    m_timer = timerBegin(DALI_TIMER_NUM, DALI_TIMER_DIVIDER, true);
     if (!m_timer) {
         DALI_LOGE("Failed to initialize timer!");
         return;
@@ -217,7 +224,7 @@ void DaliBusComponent::setup_timer() {
     
     // Set alarm to trigger every 104.167 microseconds (9600 Hz)
     // 104.167 us = 104 ticks at 1 MHz
-    timerAlarmWrite(m_timer, 104, true);
+    timerAlarmWrite(m_timer, TIMER_TICKS_PER_SAMPLE, true);
     timerAlarmEnable(m_timer);
     
     DALI_LOGD("Hardware timer configured at 9600 Hz");

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <stdint.h>
-#include <functional>
 
 // DALI Library - Timer-driven implementation
 // Based on qqqlab/Waveshare DALI library design
