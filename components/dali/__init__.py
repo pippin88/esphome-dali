@@ -53,14 +53,5 @@ async def to_code(config: OrderedDict):
     if config.get(CONF_DISCOVERY, False):
         cg.add(var.do_device_discovery())
 
-        # When discovery is enabled but no light components are defined
-        # in the YAML, we need to make it look like we have a light 
-        # defined so it will compile in support. Without this, USE_LIGHT
-        # will not be defined.
-        #
-        # This can be done by registering this bus component as a light,
-        # making the core think there is at least one light defined.
-        CORE.register_platform_component("light", bus)
-
     if config.get(CONF_INITIALIZE_ADDRESSES, False):
         cg.add(var.do_initialize_addresses())

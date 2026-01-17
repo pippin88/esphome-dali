@@ -123,8 +123,11 @@ async def to_code(config):
     # DaliLight must be linked to DaliBusComponent
     parent = await cg.get_variable(config[CONF_DALI_BUS])
 
-    # LightState must be linked to DaliLight (LightOutput)
-    var = await light.new_light(config, parent)
+    # Create the DaliLight output
+    var = cg.new_Pvariable(config[CONF_OUTPUT_ID], parent)
+    
+    # Register it as a light
+    await light.register_light(var, config)
 
     if CONF_ADDRESS in config:
         cg.add(var.set_address(config[CONF_ADDRESS]))
