@@ -217,3 +217,43 @@ void DaliBusComponent::resetBus() {
     if (m_txPin)
         m_txPin->digital_write(LOW);
 }
+
+// Implement the virtual methods declared in dali.h / esphome_dali.h
+void DaliBusComponent::sendForwardFrame(uint8_t address, uint8_t data) {
+    // START bit
+    writeBit(1);
+    // address + data
+    writeByte(address);
+    writeByte(data);
+
+    // Drive line low for a short time, then wait required spacing
+    if (m_txPin)
+        m_txPin->digital_write(LOW);
+
+    delayMicroseconds(HALF_BIT_PERIOD * 2);
+    delayMicroseconds(BIT_PERIOD * 4);
+}
+
+uint8_t DaliBusComponent::receiveBackwardFrame(unsigned long timeout_ms) {
+    unsigned long startTime = millis();
+
+    // Wait for START bit (line goes high for start)
+    while (m_rxPin && m_rxPin->digital_read() == LOW) {
+        if (millis() - startTime >= timeout_ms) {
+            return 0;
+        }
+        delay(0);
+    }
+
+    // Wait to sample first data bit
+    delayMicroseconds(BIT_PERIOD);
+    delayMicroseconds(QUARTER_BIT_PERIOD);
+
+    uint8_t data = readByte();
+
+    // Wait for remaining stop bits and minimum spacing before next frame
+    delayMicroseconds(BIT_PERIOD * 2);
+    delayMicroseconds(BIT_PERIOD * 8);
+
+    return data;
+}
