@@ -14,9 +14,9 @@ enum class DaliInitMode {
 
 // RX pull mode: names chosen to avoid collision with SDK macros
 enum class RxPullMode {
-    NONE,
-    PULLUP_MODE,
-    PULLDOWN_MODE
+    RX_PULL_NONE,
+    RX_PULL_UP,
+    RX_PULL_DOWN
 };
 
 class DaliBusComponent : public Component, public DaliPort {
@@ -76,7 +76,7 @@ private:
     uint32_t m_addresses[ADDR_SHORT_MAX+1] = {0};
 
     // runtime options
-    RxPullMode m_rx_pull = RxPullMode::PULLDOWN_MODE;
+    RxPullMode m_rx_pull = RxPullMode::RX_PULL_DOWN;
     bool m_debug_rxtx = false;
 
     // hardware timer handle (Arduino wrapper in this environment)
