@@ -127,6 +127,7 @@ light::LightTraits dali::DaliLight::get_traits() {
     // Force a color mode irrespective of what the device itself says it supports
     // eg. you can convert a CT capable device to a plain brighness device,
     // or force colour temperature support and hope the device recognizes the command...
+    /*    ORIGINAL @jorticus:
     if (this->color_mode_.has_value()) {
         switch (this->color_mode_.value()) {
             case DaliColorMode::COLOR_TEMPERATURE: 
@@ -158,6 +159,30 @@ light::LightTraits dali::DaliLight::get_traits() {
     }
 
     return traits;
+    */
+
+    //********** Github Copilot update
+    // Modern ESPHome requires set_supported_color_modes()
+    light::LightTraits traits;
+
+    // Always support simple brightness mode
+    traits.set_supported_color_modes({ light::ColorMode::BRIGHTNESS });
+
+    // If the device supports colour temperature, expose it as well
+    if (this->tc_supported_) {
+        // add_supported_color_mode appends another supported mode
+        traits.add_supported_color_mode(light::ColorMode::COLOR_TEMPERATURE);
+        traits.set_min_mireds(this->warm_white_temperature_);
+        traits.set_max_mireds(this->cold_white_temperature_);
+    }
+
+    // set default min/max as needed (optional)
+    traits.set_default_transition_length(this->fade_time_);
+
+    return traits;
+
+    //********** End Github Copilot update
+    
 }
 
 void dali::DaliLight::write_state(light::LightState *state) {
