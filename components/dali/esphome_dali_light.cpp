@@ -1,4 +1,3 @@
-
 #include <esphome.h>
 #include "esphome_dali_light.h"
 #include "esphome/core/log.h"
@@ -14,13 +13,9 @@ namespace dali {
 
 light::LightTraits DaliLight::get_traits() {
   light::LightTraits traits;
-  // This device supports brightness and optionally color temperature (if tc_supported_ is true).
-  traits.set_supported_color_modes({light::ColorMode::BRIGHTNESS});
-  traits.set_min_mired(153.0f); // Example defaults, override if device reports
-  traits.set_max_mired(370.0f);
-  traits.set_supports_gamma(false);
-  traits.set_supports_color_temperature(tc_supported_);
-  traits.set_supports_brightness(true);
+  // Only advertise brightness control here. More capabilities (CT) are
+  // detected at runtime in setup_state() and surfaced separately.
+  traits.set_supported_color_modes({ light::ColorMode::BRIGHTNESS });
   return traits;
 }
 
@@ -46,7 +41,7 @@ void DaliLight::setup_state(light::LightState *state) {
       this->dali_level_range_ = (float)(this->dali_level_max_ - this->dali_level_min_ + 1);
       ESP_LOGD(TAG, "Reported min:%d max:%d", this->dali_level_min_, this->dali_level_max_);
 
-      // Check color temperature capability
+      // Check color temperature capability (store flag; don't change traits here)
       this->tc_supported_ = bus->dali.color.isTcCapable(this->address_);
       if (this->tc_supported_) {
         ESP_LOGD(TAG, "DALI[%.2x] supports color temperature", this->address_);
@@ -89,7 +84,7 @@ void DaliLight::write_state(light::LightState *state) {
   if (tc_supported_) {
     // If color temperature supported, prefer temperature + brightness if provided
     state->current_values_as_ct(&color_temperature, &brightness);
-    // Map color temperature if necessary (left as-is for now)
+    // Mapping of CT is left as-is; brightness mapping applies below.
   } else {
     state->current_values_as_brightness(&brightness);
   }
@@ -111,6 +106,3 @@ void DaliLight::write_state(light::LightState *state) {
   // Use DaliMaster high-level API to set brightness
   bus->dali.lamp.setBrightness(this->address_, dali_value);
 }
-
-}  // namespace dali
-}  // namespace esphome
