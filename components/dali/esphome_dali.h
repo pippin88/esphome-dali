@@ -1,7 +1,7 @@
 #pragma once
 
 #include <esphome.h>
-#include "dali_port.h"
+#include "dali.h"
 
 namespace esphome {
 namespace dali {
