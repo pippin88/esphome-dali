@@ -7,6 +7,8 @@
 // Use the qqqlab/Waveshare DALI driver library (already present in repo)
 #include "DALI_Lib.h"
 
+extern Dali dali; // global low-level Dali driver instance
+
 /* Ensure the low-level DALI driver implementation is compiled/linked.
    Some ESPHome build layouts do not automatically add all .cpp files from
    custom components into the build object list; including the .cpp
@@ -21,8 +23,6 @@
 #endif
 
 
-
-extern Dali dali; // global low-level Dali driver instance
 
 using namespace esphome;
 
