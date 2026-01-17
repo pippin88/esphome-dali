@@ -1,3 +1,4 @@
+
 #include <esphome.h>
 #include <esp_task_wdt.h>
 #include "esphome_dali.h"
@@ -59,7 +60,7 @@ void DaliBusComponent::setup() {
             }
 
             // Probe the short address (QUERY_CONTROL_GEAR_PRESENT). DaliMaster::isDevicePresent
-            // now requires an exact 0xFF reply to consider a device present.
+            // should return 0xFF for a positive response.
             if (!dali.isDevicePresent(short_addr)) {
                 DALI_LOGD("No device at short address %.2x", short_addr);
                 continue;
@@ -121,7 +122,6 @@ void DaliBusComponent::create_light_component(short_addr_t short_addr, uint32_t 
     // NOTE: Not freeing these strings, they will be owned by LightState.
 
     auto* light_state = new light::LightState { dali_light };
-    light_state->set_component_source("light");
     App.register_light(light_state);
     App.register_component(light_state);
     light_state->set_name(name);
