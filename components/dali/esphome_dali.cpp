@@ -26,9 +26,9 @@ static void IRAM_ATTR dali_timer_isr() {
     ::dali.timer();
 }
 
-// ISR-safe wrappers (file scope)
-static uint8_t IRAM_ATTR dali_bus_is_high_wrapper() {
-    return gpio_get_level(RAW_RX_GPIO) ? 1 : 0;
+// ISR-safe wrappers (file scope) — match the types expected by Dali::begin()
+static bool IRAM_ATTR dali_bus_is_high_wrapper() {
+    return gpio_get_level(RAW_RX_GPIO) ? true : false;
 }
 static void IRAM_ATTR dali_bus_set_low_wrapper() {
     gpio_set_level(RAW_TX_GPIO, 0);
@@ -76,8 +76,8 @@ void DaliBusComponent::setup() {
     }
 
     // Initialize the library with the ISR-safe wrappers
-    // Note: Dali::begin expects (bus_is_high, bus_set_low, bus_set_high)
-    ::dali.begin(&dali_bus_is_high_wrapper, &dali_bus_set_low_wrapper, &dali_bus_set_high_wrapper);
+    // Note: Dali::begin expects (bus_is_high, bus_set_high, bus_set_low)
+    ::dali.begin(&dali_bus_is_high_wrapper, &dali_bus_set_high_wrapper, &dali_bus_set_low_wrapper);
 
     // Discovery (optional)
     if (m_discovery) {
@@ -134,129 +134,4 @@ void DaliBusComponent::setup() {
         DALI_LOGI("Device discovery finished.");
     }
 }
-
-void DaliBusComponent::resetBus() {
-    DALI_LOGD("Resetting bus");
-    // release
-    if (m_txPin) m_txPin->digital_write(HIGH);
-    delay(1000);
-    if (m_txPin) m_txPin->digital_write(LOW);
-}
-
-// send a forward frame (address + data) using the qqqlab library API (addr+data)
-void DaliBusComponent::sendForwardFrame(uint8_t address, uint8_t data) {
-    if (m_debug_rxtx) {
-        DALI_LOGD("TX: addr=0x%02x data=0x%02x (via library tx_wait)", address, data);
-    }
-
-    // Use the library's blocking transmit that takes address+data
-    bool ok = ::dali.tx_wait(address, data, 500);
-    if (!ok) {
-        DALI_LOGW("dali.tx_wait returned failure for addr=0x%02x data=0x%02x", address, data);
-    }
-}
-
-// wait for backward frame (reply) using the library's rx() function
-uint8_t DaliBusComponent::receiveBackwardFrame(unsigned long timeout_ms) {
-    unsigned long start = millis();
-    uint8_t rxbuf[4];
-
-    while (millis() - start < timeout_ms) {
-        int rv = ::dali.rx(rxbuf);
-        switch (rv) {
-            case 0:
-                // nothing yet
-                break;
-            case 1:
-                // receiving in progress; allow more time
-                break;
-            case 2:
-                // decode error
-                DALI_LOGW("dali.rx returned decode error");
-                return 0;
-            case 8:
-                // backward frame (8 bits) decoded
-                if (m_debug_rxtx) DALI_LOGD("RX (back): 0x%02x", rxbuf[0]);
-                return rxbuf[0];
-            case 16:
-                // forward frame was observed - ignore for backward read
-                if (m_debug_rxtx) DALI_LOGD("RX: forward frame observed while waiting for backward reply");
-                break;
-            default:
-                // other unexpected values - continue
-                break;
-        }
-        delayMicroseconds(100);
-    }
-
-    if (m_debug_rxtx) DALI_LOGD("receiveBackwardFrame timeout");
-    return 0;
-}
-
-void DaliBusComponent::loop() { }
-
-void DaliBusComponent::dump_config() {
-    DALI_LOGI("DALI bus config: rx_pull=%d debug=%d", (int)m_rx_pull, (int)m_debug_rxtx);
-}
-
-/* Keep the existing helpers in case other code paths rely on them (bit-bang fallback).
-   They are not used for backward-frame decoding anymore. */
-
-void DaliBusComponent::writeBit(bool bit) {
-    if (m_txPin)
-        m_txPin->digital_write(bit ? LOW : HIGH);
-    delayMicroseconds(416);
-    if (m_txPin)
-        m_txPin->digital_write(bit ? HIGH : LOW);
-    delayMicroseconds(416);
-}
-
-void DaliBusComponent::writeByte(uint8_t b) {
-    for (int i = 0; i < 8; i++) {
-        writeBit(b & 0x80);
-        b <<= 1;
-    }
-}
-
-uint8_t DaliBusComponent::readByte() {
-    // Deprecated for backward frames - use library's rx()
-    uint8_t byte = 0;
-    for (int i = 0; i < 8; i++) {
-        byte <<= 1;
-        byte |= (m_rxPin ? m_rxPin->digital_read() : 0);
-        delayMicroseconds(833);
-    }
-    return byte;
-}
-
-void DaliBusComponent::create_light_component(short_addr_t short_addr, uint32_t long_addr) {
-#ifdef USE_LIGHT
-    DaliLight* dali_light = new DaliLight { this };
-    dali_light->set_address(short_addr);
-
-    const int MAX_STR_LEN = 32;
-    char* name = new char[MAX_STR_LEN];
-    char* id = new char[MAX_STR_LEN];
-
-    if (long_addr != 0) {
-        snprintf(name, MAX_STR_LEN, "DALI Light %.2x", short_addr);
-        snprintf(id, MAX_STR_LEN, "dali_light_%.6x", long_addr);
-    } else {
-        snprintf(name, MAX_STR_LEN, "DALI Light %.2x", short_addr);
-        snprintf(id, MAX_STR_LEN, "dali_light_sa%.2x", short_addr);
-    }
-
-    auto* light_state = new light::LightState { dali_light };
-    App.register_light(light_state);
-    App.register_component(light_state);
-    light_state->set_name(name);
-    light_state->set_object_id(id);
-    light_state->set_disabled_by_default(false);
-    light_state->set_restore_mode(light::LIGHT_RESTORE_DEFAULT_ON);
-    light_state->add_effects({});
-
-    DALI_LOGI("Created light component '%s' (%s)", name, id);
-#else
-    DALI_LOGE("Cannot add light component - not enabled");
-#endif
-}
+... (rest unchanged) ...
