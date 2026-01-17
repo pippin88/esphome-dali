@@ -19,7 +19,7 @@ DaliBusComponent = dali_ns.class_('DaliBusComponent', cg.Component)
 
 # create enum in the C++ namespace so codegen can reference it
 RxPullMode = dali_ns.enum('RxPullMode')
-# Note: The C++ enum names are NONE, PULLUP_MODE, PULLDOWN_MODE
+# Note: The C++ enum names are RX_PULL_NONE, RX_PULL_UP, RX_PULL_DOWN
 
 CONFIG_SCHEMA = cv.Schema({
     cv.GenerateID(): cv.declare_id(DaliBusComponent),
@@ -56,8 +56,8 @@ async def to_code(config: OrderedDict):
     # rx_pull mapping -> call the C++ enum values
     rx_pull = config.get(CONF_RX_PULL, "pulldown")
     if rx_pull == "none":
-        cg.add(var.set_rx_pull(dali_ns.RxPullMode.NONE))
+        cg.add(var.set_rx_pull(dali_ns.RxPullMode.RX_PULL_NONE))
     elif rx_pull == "pullup":
-        cg.add(var.set_rx_pull(dali_ns.RxPullMode.PULLUP_MODE))
+        cg.add(var.set_rx_pull(dali_ns.RxPullMode.RX_PULL_UP))
     else:
-        cg.add(var.set_rx_pull(dali_ns.RxPullMode.PULLDOWN_MODE))
+        cg.add(var.set_rx_pull(dali_ns.RxPullMode.RX_PULL_DOWN))
