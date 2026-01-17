@@ -15,8 +15,8 @@ enum class DaliInitMode {
 
 enum class RxPullMode {
     NONE,
-    PULLUP,
-    PULLDOWN
+    PULLUP_MODE,
+    PULLDOWN_MODE
 };
 
 class DaliBusComponent : public Component, public DaliPort {
@@ -91,7 +91,7 @@ private:
     
     // Configuration options
     bool m_debug_rxtx = false;
-    RxPullMode m_rx_pull = RxPullMode::PULLDOWN;
+    RxPullMode m_rx_pull = RxPullMode::PULLDOWN_MODE;
     
     // Hardware timer handle
     hw_timer_t* m_timer = nullptr;

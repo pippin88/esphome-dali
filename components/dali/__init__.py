@@ -20,8 +20,8 @@ RxPullMode = dali_ns.enum('RxPullMode')
 
 RX_PULL_MODES = {
     'NONE': RxPullMode.NONE,
-    'PULLUP': RxPullMode.PULLUP,
-    'PULLDOWN': RxPullMode.PULLDOWN,
+    'PULLUP': RxPullMode.PULLUP_MODE,
+    'PULLDOWN': RxPullMode.PULLDOWN_MODE,
 }
 
 CONFIG_SCHEMA = cv.Schema({

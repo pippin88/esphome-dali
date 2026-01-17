@@ -132,7 +132,7 @@ void Dali::rx_timer_handler() {
     
     switch (m_rx_state) {
         case RX_IDLE:
-            // Look for start bit (transition from HIGH to LOW)
+            // Look for start bit (HIGH-to-LOW transition for Manchester start)
             if (!bus_high) {
                 m_rx_state = RX_START_BIT;
                 m_rx_sample_count = 0;
@@ -145,23 +145,46 @@ void Dali::rx_timer_handler() {
             m_rx_sample_count++;
             // Wait for full start bit (8 samples)
             if (m_rx_sample_count >= DALI_SAMPLES_PER_BIT) {
-                m_rx_state = RX_DATA_BIT;
+                m_rx_state = RX_DATA_BIT_FIRST_HALF;
                 m_rx_sample_count = 0;
             }
             break;
             
-        case RX_DATA_BIT:
+        case RX_DATA_BIT_FIRST_HALF:
             m_rx_sample_count++;
             
-            // DALI backward frames use simple NRZ encoding (not Manchester)
-            // Sample in the middle of the bit period (after 4 samples)
-            if (m_rx_sample_count == DALI_HALF_BIT_SAMPLES) {
-                m_rx_data = (m_rx_data << 1) | (bus_high ? 1 : 0);
-                m_rx_bit_index++;
+            // Sample at mid-point of first half (sample 2 of 8)
+            if (m_rx_sample_count == 2) {
+                m_rx_first_half_sample = bus_high;
+            }
+            
+            // After first half, move to second half
+            if (m_rx_sample_count >= DALI_HALF_BIT_SAMPLES) {
+                m_rx_state = RX_DATA_BIT_SECOND_HALF;
+            }
+            break;
+            
+        case RX_DATA_BIT_SECOND_HALF:
+            m_rx_sample_count++;
+            
+            // Sample at mid-point of second half (sample 6 of 8)
+            if (m_rx_sample_count == 6) {
+                bool second_half_sample = bus_high;
+                
+                // Manchester decoding: compare first and second half
+                // Logical 1: HIGH->LOW (first half HIGH, second half LOW)
+                // Logical 0: LOW->HIGH (first half LOW, second half HIGH)
+                m_rx_data = (m_rx_data << 1);
+                if (m_rx_first_half_sample && !second_half_sample) {
+                    // HIGH->LOW = 1
+                    m_rx_data |= 1;
+                }
+                // else LOW->HIGH or other = 0 (already shifted in 0)
             }
             
             if (m_rx_sample_count >= DALI_SAMPLES_PER_BIT) {
                 m_rx_sample_count = 0;
+                m_rx_bit_index++;
                 
                 if (m_rx_bit_index >= 8) {
                     // Received all 8 bits
@@ -170,6 +193,9 @@ void Dali::rx_timer_handler() {
                     m_response_byte = m_rx_data;
                     m_response_ready = true;
                     m_rx_state = RX_STOP_BIT;
+                } else {
+                    // Continue with next bit
+                    m_rx_state = RX_DATA_BIT_FIRST_HALF;
                 }
             }
             break;

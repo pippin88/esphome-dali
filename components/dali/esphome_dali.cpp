@@ -10,8 +10,9 @@ using namespace esphome;
 using namespace dali;
 
 // Static variables for ISR access
-static volatile gpio_num_t s_tx_gpio = GPIO_NUM_NC;
-static volatile gpio_num_t s_rx_gpio = GPIO_NUM_NC;
+// Using fixed GPIO pins for ESP32-S3: TX=17, RX=14
+static volatile gpio_num_t s_tx_gpio = GPIO_NUM_17;
+static volatile gpio_num_t s_rx_gpio = GPIO_NUM_14;
 static DaliBusComponent* s_bus_component = nullptr;
 
 // ISR-safe GPIO wrapper functions for DALI library
@@ -58,11 +59,11 @@ void DaliBusComponent::setup() {
         
         gpio::Flags rx_flags = gpio::Flags::FLAG_INPUT;
         switch (m_rx_pull) {
-            case RxPullMode::PULLUP:
+            case RxPullMode::PULLUP_MODE:
                 rx_flags = rx_flags | gpio::Flags::FLAG_PULLUP;
                 DALI_LOGD("RX pin configured with PULLUP");
                 break;
-            case RxPullMode::PULLDOWN:
+            case RxPullMode::PULLDOWN_MODE:
                 rx_flags = rx_flags | gpio::Flags::FLAG_PULLDOWN;
                 DALI_LOGD("RX pin configured with PULLDOWN");
                 break;
@@ -279,21 +280,44 @@ void DaliBusComponent::sendForwardFrame(uint8_t address, uint8_t data) {
 }
 
 uint8_t DaliBusComponent::receiveBackwardFrame(unsigned long timeout_ms) {
-    // Use DALI library rx function for passive monitoring
-    uint8_t data = 0;
+    // Use DALI library rx function to wait for backward frame
+    // rx() returns:
+    //   0 = no frame available
+    //   1 = receiving in progress  
+    //   2 = decode error
+    //   8 = backward frame (8 bits) received successfully
+    //   16 = forward frame (16 bits) - not a backward reply
     
-    // Wait for a backward frame with timeout
+    uint8_t rxBuf[2] = {0, 0};
     unsigned long startTime = millis();
+    
     while (millis() - startTime < timeout_ms) {
-        if (::dali.rx(&data) == 8) {
+        uint8_t result = ::dali.rx(rxBuf);
+        
+        if (result == 8) {
+            // Successfully received backward frame (8-bit response)
             if (m_debug_rxtx) {
-                DALI_LOGD("RX: 0x%02x", data);
+                DALI_LOGD("RX backward: 0x%02x", rxBuf[0]);
             }
-            return data;
+            return rxBuf[0];
+        } else if (result == 16) {
+            // Received forward frame (16-bit command) - not a backward reply
+            if (m_debug_rxtx) {
+                DALI_LOGD("RX forward frame (not a reply): 0x%02x 0x%02x", rxBuf[0], rxBuf[1]);
+            }
+            // Continue waiting for actual backward frame
+        } else if (result == 2) {
+            // Decode error
+            if (m_debug_rxtx) {
+                DALI_LOGW("RX decode error");
+            }
+            // Continue waiting
         }
+        // For result == 0 (no frame) or 1 (receiving), just continue polling
+        
         delay(1);
     }
     
-    // Timeout - no frame received
+    // Timeout - no backward frame received
     return 0;
 }

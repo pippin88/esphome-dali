@@ -71,7 +71,8 @@ private:
     enum RxState {
         RX_IDLE,
         RX_START_BIT,
-        RX_DATA_BIT,
+        RX_DATA_BIT_FIRST_HALF,
+        RX_DATA_BIT_SECOND_HALF,
         RX_STOP_BIT,
         RX_COMPLETE
     };
@@ -82,6 +83,7 @@ private:
     volatile uint8_t m_rx_sample_count;
     volatile uint8_t m_rx_bits_received;
     volatile bool m_rx_frame_ready;
+    volatile bool m_rx_first_half_sample;  // Store first half of Manchester bit
     
     // Response storage
     volatile uint8_t m_response_byte;
