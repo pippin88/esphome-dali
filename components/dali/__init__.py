@@ -10,10 +10,19 @@ AUTO_LOAD = ["light", "output"]
 
 CONF_DALI_BUS = 'dali_bus'
 CONF_INITIALIZE_ADDRESSES = 'initialize_addresses'
+CONF_DEBUG_RXTX = 'debug_rxtx'
+CONF_RX_PULL = 'rx_pull'
 
 dali_ns = cg.esphome_ns.namespace('dali')
 dali_lib_ns = cg.global_ns
 DaliBusComponent = dali_ns.class_('DaliBusComponent', cg.Component)
+RxPullMode = dali_ns.enum('RxPullMode')
+
+RX_PULL_MODES = {
+    'NONE': RxPullMode.NONE,
+    'PULLUP': RxPullMode.PULLUP,
+    'PULLDOWN': RxPullMode.PULLDOWN,
+}
 
 CONFIG_SCHEMA = cv.Schema({
     cv.GenerateID(): cv.declare_id(DaliBusComponent),
@@ -21,6 +30,8 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Required(CONF_TX_PIN): pins.gpio_output_pin_schema,
     cv.Optional(CONF_DISCOVERY): cv.All(cv.requires_component("light"), cv.boolean),
     cv.Optional(CONF_INITIALIZE_ADDRESSES): cv.boolean,
+    cv.Optional(CONF_DEBUG_RXTX, default=False): cv.boolean,
+    cv.Optional(CONF_RX_PULL, default='PULLDOWN'): cv.enum(RX_PULL_MODES, upper=True),
 }).extend(cv.COMPONENT_SCHEMA)
 
 async def to_code(config: OrderedDict):
@@ -33,17 +44,14 @@ async def to_code(config: OrderedDict):
     tx_pin = await cg.gpio_pin_expression(config[CONF_TX_PIN])
     cg.add(var.set_tx_pin(tx_pin))
 
+    # Set debug_rxtx option
+    cg.add(var.set_debug_rxtx(config[CONF_DEBUG_RXTX]))
+    
+    # Set rx_pull option
+    cg.add(var.set_rx_pull(config[CONF_RX_PULL]))
+
     if config.get(CONF_DISCOVERY, False):
         cg.add(var.do_device_discovery())
-
-        # When discovery is enabled but no light components are defined
-        # in the YAML, we need to make it look like we have a light 
-        # defined so it will compile in support. Without this, USE_LIGHT
-        # will not be defined.
-        #
-        # This can be done by registering this bus component as a light,
-        # making the core think there is at least one light defined.
-        CORE.register_platform_component("light", bus)
 
     if config.get(CONF_INITIALIZE_ADDRESSES, False):
         cg.add(var.do_initialize_addresses())

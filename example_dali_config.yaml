@@ -1,0 +1,107 @@
+# Sample ESPHome configuration with DALI library integration
+# Demonstrates the new timer-driven DALI implementation with runtime configuration
+
+substitutions:
+  device_name: dali_master_test
+  device_description: DALI Master with Timer-Driven Library
+
+esphome:
+  name: ${device_name}
+  comment: ${device_description}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# WiFi configuration
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  
+  # Enable fallback hotspot in case WiFi connection fails
+  ap:
+    ssid: "DALI Fallback Hotspot"
+    password: "dali12345678"
+
+# Enable Home Assistant API
+api:
+
+# Enable OTA updates
+ota:
+  - platform: esphome
+
+# Enable logging
+logger:
+  level: DEBUG
+
+# Enable web server
+web_server:
+  port: 80
+
+# External components - use local development version
+external_components:
+  - source: 
+      type: local
+      path: components
+
+# DALI Bus Configuration with new timer-driven library
+dali:
+  id: dali_bus
+  tx_pin: GPIO32  # DALI TX pin (connected to DALI TX circuit)
+  rx_pin: GPIO33  # DALI RX pin (connected to DALI RX circuit)
+  
+  # Automatic device discovery
+  discovery: true
+  
+  # Automatic address initialization for unassigned devices
+  initialize_addresses: true
+  
+  # NEW: Enable debug logging for TX/RX frames
+  # Set to true to see detailed DALI bus activity in logs
+  debug_rxtx: false
+  
+  # NEW: Configure RX pin pull resistor
+  # Options: NONE, PULLUP, PULLDOWN (default: PULLDOWN)
+  # Use PULLDOWN if your DALI adapter doesn't have built-in pull
+  # Use NONE if your adapter already provides pull/bias
+  rx_pull: PULLDOWN
+
+# Example: Broadcast light (controls all DALI devices)
+light:
+  - platform: dali
+    id: dali_light_broadcast
+    name: "DALI Light (All)"
+    restore_mode: RESTORE_DEFAULT_ON
+    
+    # Color temperature UI settings (for display only)
+    cold_white_color_temperature: 4000K
+    warm_white_color_temperature: 2700K
+    
+    # Force color temperature mode
+    color_mode: COLOR_TEMPERATURE
+    
+    # Set dimming curve on the device
+    brightness_curve: LOGARITHMIC  # or LINEAR
+    
+    # Configure fade settings on the device
+    fade_time: 1.0s  # Fade duration
+    fade_rate: 7     # Fade rate parameter
+
+  # Example: Individual device at short address 0
+  - platform: dali
+    id: dali_light_0
+    name: "DALI Light 0"
+    address: 0  # Short address of specific device
+    restore_mode: RESTORE_DEFAULT_ON
+    cold_white_color_temperature: 4000K
+    warm_white_color_temperature: 2700K
+
+  # Example: Individual device at short address 1
+  - platform: dali
+    id: dali_light_1
+    name: "DALI Light 1"
+    address: 1
+    restore_mode: RESTORE_DEFAULT_ON
+    cold_white_color_temperature: 4000K
+    warm_white_color_temperature: 2700K
