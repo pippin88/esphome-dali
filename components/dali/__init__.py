@@ -17,7 +17,7 @@ dali_ns = cg.esphome_ns.namespace('dali')
 dali_lib_ns = cg.global_ns
 DaliBusComponent = dali_ns.class_('DaliBusComponent', cg.Component)
 
-# simple enum mapping for rx pull - we pass an int to the generated C++ setter
+# create enum in the C++ namespace so codegen can reference it
 RxPullMode = dali_ns.enum('RxPullMode')
 # Note: The C++ enum names are NONE, PULLUP_MODE, PULLDOWN_MODE
 
@@ -28,7 +28,7 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Optional(CONF_DISCOVERY): cv.All(cv.requires_component("light"), cv.boolean),
     cv.Optional(CONF_INITIALIZE_ADDRESSES): cv.boolean,
     cv.Optional(CONF_DEBUG_RXTX, default=False): cv.boolean,
-    cv.Optional(CONF_RX_PULL, default="pulldown"): cv.OneOf("none", "pullup", "pulldown"),
+    cv.Optional(CONF_RX_PULL, default="pulldown"): cv.one_of("none", "pullup", "pulldown"),
 }).extend(cv.COMPONENT_SCHEMA)
 
 async def to_code(config: OrderedDict):
@@ -53,7 +53,7 @@ async def to_code(config: OrderedDict):
     if CONF_DEBUG_RXTX in config:
         cg.add(var.set_debug_rxtx(config[CONF_DEBUG_RXTX]))
 
-    # rx_pull mapping
+    # rx_pull mapping -> call the C++ enum values
     rx_pull = config.get(CONF_RX_PULL, "pulldown")
     if rx_pull == "none":
         cg.add(var.set_rx_pull(dali_ns.RxPullMode.NONE))
