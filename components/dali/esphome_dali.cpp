@@ -10,18 +10,15 @@ using namespace esphome;
 using namespace dali;
 
 void DaliBusComponent::setup() {
-    // Modern pin API: ensure correct flags are used
-    // Keep TX as output
+    // TX as output
     if (m_txPin) {
         m_txPin->pin_mode(gpio::Flags::FLAG_OUTPUT);
-        // Ensure output is low by default (inverted logic in this component)
+        // Ensure default output state (inverted logic)
         m_txPin->digital_write(LOW);
     }
 
-    // On some newer ESP32 variants (S3), the RX pin can float unless an internal
-    // pull-up is enabled. Use INPUT + PULLUP to avoid floating values. If you
-    // find that INPUT_PULLUP prevents feedback on your hardware, consider
-    // an external pull-down or wiring changes.
+    // On some ESP32-S3 boards RX floats; enable internal pull-up to stabilize.
+    // If this prevents feedback on your hardware, use an external pull-down instead.
     if (m_rxPin) {
         m_rxPin->pin_mode(gpio::Flags::FLAG_INPUT | gpio::Flags::FLAG_PULLUP);
     }
@@ -157,7 +154,6 @@ void DaliBusComponent::create_light_component(short_addr_t short_addr, uint32_t 
     // NOTE: Not freeing these strings, they will be owned by LightState.
 
     auto* light_state = new light::LightState { dali_light };
-    light_state->set_component_source("light");
     App.register_light(light_state);
     App.register_component(light_state);
     light_state->set_name(name);
