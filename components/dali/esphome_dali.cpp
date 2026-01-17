@@ -1,3 +1,4 @@
+ url=https://github.com/pippin88/esphome-dali/blob/master/components/dali/esphome_dali.cpp
 #include <esphome.h>
 #include <esp_task_wdt.h>
 #include "esphome_dali.h"
@@ -17,10 +18,11 @@ void DaliBusComponent::setup() {
         m_txPin->digital_write(LOW);
     }
 
-    // On some ESP32-S3 boards RX floats; enable internal pull-up to stabilize.
-    // If this prevents feedback on your hardware, use an external pull-down instead.
+    // Configure RX as plain input (no internal pull). Many DALI adapters
+    // already provide a bias; internal pull-ups on some S3 boards can
+    // interfere with backward-frame detection.
     if (m_rxPin) {
-        m_rxPin->pin_mode(gpio::Flags::FLAG_INPUT | gpio::Flags::FLAG_PULLUP);
+        m_rxPin->pin_mode(gpio::Flags::FLAG_INPUT);
     }
 
     DALI_LOGI("DALI bus ready");
@@ -42,12 +44,12 @@ void DaliBusComponent::setup() {
         if (this->m_initialize_addresses != DaliInitMode::DiscoverOnly) {
             if (this->m_initialize_addresses == DaliInitMode::InitializeAll) {
                 DALI_LOGI("Randomizing addresses for *all* DALI devices");
-                dali.bus_manager.initialize(ASSIGN_ALL); 
-            } 
+                dali.bus_manager.initialize(ASSIGN_ALL);
+            }
             else if (this->m_initialize_addresses == DaliInitMode::InitializeUnassigned) {
                 // Only randomize devices without an assigned short address
                 DALI_LOGI("Randomizing addresses for unassigned DALI devices");
-                dali.bus_manager.initialize(ASSIGN_UNINITIALIZED); 
+                dali.bus_manager.initialize(ASSIGN_UNINITIALIZED);
             }
 
             dali.bus_manager.randomize();
@@ -57,87 +59,65 @@ void DaliBusComponent::setup() {
             delay(50);
         }
 
-        DALI_LOGI("Begin device discovery...");
-        dali.bus_manager.startAddressScan(); // All devices
+        DALI_LOGI("Begin device discovery via short-address scan...");
 
-        // Keep track of short addresses to detect duplicates
+        // New discovery approach:
+        // Some adapters and setups respond better to probing each short address
+        // rather than broadcast SEARCHADDR. Iterate all short addresses and query
+        // each one directly using QUERY_CONTROL_GEAR_PRESENT (isDevicePresent).
+        //
+        // This mirrors the behavior of many DALI tools that poll each short address.
         bool duplicate_detected = false;
-        bool is_discovered[ADDR_SHORT_MAX+1];
-        for (int i = 0; i <= ADDR_SHORT_MAX; i++) {
-            is_discovered[i] = false;
-        }
 
-        uint8_t count = 0;
-        short_addr_t short_addr = 0xFF;
-        uint32_t long_addr = 0;
-        while (dali.bus_manager.findNextAddress(short_addr, long_addr)) {
-            count++;
-            delay(1); // yield to ESP stack
+        for (short_addr_t short_addr = 0; short_addr <= ADDR_SHORT_MAX; ++short_addr) {
+            // Lightly yield to the OS / WDT
+            delay(1);
             esp_task_wdt_reset();
 
-            if (short_addr <= ADDR_SHORT_MAX) {
-                DALI_LOGI("  Device %.6x @ %.2x", long_addr, short_addr);
-
-                // Duplicate detection
-                if (is_discovered[short_addr]) {
-                    if (m_initialize_addresses == DaliInitMode::DiscoverOnly) {
-                        DALI_LOGW("  WARNING: Duplicate short address detected!");
-                        duplicate_detected = true;
-                    }
-                    else {
-                        // Assign a new address for this
-                        short_addr++;
-                        DALI_LOGD("  Duplicate short address detected, assigning a new address: %.2x", short_addr);
-
-                        if (!dali.bus_manager.programShortAddress(short_addr)) {
-                            DALI_LOGE("  Could not program short address");
-                            short_addr = 0xFF;
-                            continue;
-                        }
-                    }
-                }
-                else {
-                    is_discovered[short_addr] = true;
-                }
-
-                // Dynamic component creation (if not defined in YAML)
-                if (m_addresses[short_addr]) {
-                    DALI_LOGD("  Ignoring, already defined");
-                }
-                else {
-                    m_addresses[short_addr] = long_addr;
-                    create_light_component(short_addr, long_addr);
-                }
+            // Skip addresses we've statically reserved in config
+            if (m_addresses[short_addr] == 0xFFFFFF) {
+                DALI_LOGD("Address %.2x is statically registered; skipping probe", short_addr);
+                continue;
             }
-            else if (short_addr == 0xFF) {
-                if (m_initialize_addresses == DaliInitMode::DiscoverOnly) {
-                    DALI_LOGI("  Device %.6x @ --", long_addr);
-                    DALI_LOGW("  No short address assigned!");
-                    continue;
-                }
-                else {
-                    short_addr = 1;
-                    DALI_LOGI("  Assigning short address: %.2x", short_addr);
 
-                    if (!dali.bus_manager.programShortAddress(short_addr)) {
-                        DALI_LOGE("  Could not program short address");
-                        short_addr = 0xFF;
-                        continue;
-                    }
+            // Query the device presence
+            bool present = false;
+            // Wrap in a try-like guard through timing/short delays to avoid blocking too long
+            // (sendQueryCommand has its own timeout)
+            present = dali.isDevicePresent(short_addr);
 
-                    DALI_LOGI("  Device %.6x @ %.2x", long_addr, short_addr);
-                }
+            if (!present) {
+                DALI_LOGD("No device at short address %.2x", short_addr);
+                continue;
             }
+
+            DALI_LOGI("Found device at short address %.2x", short_addr);
+
+            // If we already know about a device at this short address, warn about duplicates
+            if (m_addresses[short_addr]) {
+                DALI_LOGW("Duplicate or already-registered short address detected: %.2x", short_addr);
+                duplicate_detected = true;
+                // We continue to query capabilities even if it's already registered.
+            } else {
+                // Attempt to query a long address or other identifying information via bus_manager
+                uint32_t long_addr = 0;
+                // bus_manager.tryGetLongAddress(...) is not available generically, so leave as 0 if unknown.
+                // Register the discovered short address and create a dynamic light component.
+                m_addresses[short_addr] = 0xFFFFFF; // mark as detected
+                create_light_component(short_addr, long_addr);
+            }
+
+            // Small delay between probes to ensure devices can respond & bus recovers
+            delay(10);
         }
-
-        DALI_LOGD("No more devices found!");
-        dali.bus_manager.endAddressScan();
 
         if (duplicate_detected) {
             DALI_LOGW("Duplicate short addresses detected on the bus!");
             DALI_LOGW("  Devices may report inconsistent capabilities.");
             DALI_LOGW("  You should fix your address assignments.");
         }
+
+        DALI_LOGI("Device discovery finished.");
     }
 }
 
@@ -220,8 +200,11 @@ void DaliBusComponent::resetBus() {
 
 // Implement the virtual methods declared in dali.h / esphome_dali.h
 void DaliBusComponent::sendForwardFrame(uint8_t address, uint8_t data) {
+    if (DEBUG_LOG_RXTX) DALI_LOGD("TX: addr=0x%02x data=0x%02x", address, data);
+
     // START bit
     writeBit(1);
+
     // address + data
     writeByte(address);
     writeByte(data);
@@ -250,6 +233,7 @@ uint8_t DaliBusComponent::receiveBackwardFrame(unsigned long timeout_ms) {
     delayMicroseconds(QUARTER_BIT_PERIOD);
 
     uint8_t data = readByte();
+    if (DEBUG_LOG_RXTX) DALI_LOGD("RX: 0x%02x", data);
 
     // Wait for remaining stop bits and minimum spacing before next frame
     delayMicroseconds(BIT_PERIOD * 2);
