@@ -1,7 +1,7 @@
 #pragma once
 
 #include <esphome.h>
-#include "dali.h"
+#include "dali_port.h"
 
 namespace esphome {
 namespace dali {
@@ -23,8 +23,9 @@ public:
     void loop() override;
     void dump_config() override;
 
-    void set_tx_pin(GPIOPin* tx_pin) { m_txPin = tx_pin; }
-    void set_rx_pin(GPIOPin* rx_pin) { m_rxPin = rx_pin; }
+    // Updated signatures to modern gpio type
+    void set_tx_pin(esphome::gpio::GPIOPin* tx_pin) { m_txPin = tx_pin; }
+    void set_rx_pin(esphome::gpio::GPIOPin* rx_pin) { m_rxPin = rx_pin; }
 
     /// @brief Perform automatic device discovery on setup.
     /// Light components will automatically be created and appear in HomeAssistant
@@ -61,13 +62,14 @@ private:
 
     void create_light_component(short_addr_t short_addr, uint32_t long_addr);
 
-    GPIOPin* m_rxPin;
-    GPIOPin* m_txPin;
+    // Use the gpio namespace type used in modern ESPHome
+    esphome::gpio::GPIOPin* m_rxPin{nullptr};
+    esphome::gpio::GPIOPin* m_txPin{nullptr};
 
     bool m_discovery = false;
     DaliInitMode m_initialize_addresses = DaliInitMode::DiscoverOnly;
     uint32_t m_addresses[ADDR_SHORT_MAX+1] = {0};
 };
 
-}  // namespace dali
-}  // namespace esphome
+} // namespace dali
+} // namespace esphome
