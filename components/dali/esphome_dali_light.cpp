@@ -1,3 +1,4 @@
+url=https://github.com/pippin88/esphome-dali/blob/main/components/dali/esphome_dali_light.cpp
 #include <esphome.h>
 #include "esphome_dali_light.h"
 #include "esphome/core/log.h"
@@ -106,3 +107,6 @@ void DaliLight::write_state(light::LightState *state) {
   // Use DaliMaster high-level API to set brightness
   bus->dali.lamp.setBrightness(this->address_, dali_value);
 }
+
+}  // namespace dali
+}  // namespace esphome
