@@ -7,13 +7,13 @@
 static const bool DEBUG_LOG_RXTX = false; // NOTE: Will probably trigger WDT
 
 using namespace esphome;
+using namespace dali;
 
 #define QUARTER_BIT_PERIOD 208
 #define HALF_BIT_PERIOD 416
 #define BIT_PERIOD 833
 
-// Setup: configure pins and run discovery if enabled
-void esphome::dali::DaliBusComponent::setup() {
+void DaliBusComponent::setup() {
     // TX as output
     if (m_txPin) {
         m_txPin->pin_mode(gpio::Flags::FLAG_OUTPUT);
@@ -58,8 +58,8 @@ void esphome::dali::DaliBusComponent::setup() {
                 continue;
             }
 
-            // Probe the short address (QUERY_CONTROL_GEAR_PRESENT). The library
-            // should return 0xFF for a positive response (see dali.h change).
+            // Probe the short address (QUERY_CONTROL_GEAR_PRESENT). DaliMaster::isDevicePresent
+            // now requires an exact 0xFF reply to consider a device present.
             if (!dali.isDevicePresent(short_addr)) {
                 DALI_LOGD("No device at short address %.2x", short_addr);
                 continue;
@@ -73,17 +73,18 @@ void esphome::dali::DaliBusComponent::setup() {
                 DALI_LOGW("Duplicate or already-registered short address detected: %.2x", short_addr);
                 duplicate_detected = true;
             } else {
-                // Mark discovered (we don't have long address here). Use 0xFFFFFF
-                // as an indicator the address is handled (mirror register_static_addr).
-                m_addresses[short_addr] = 0xFFFFFF;
+                // Try to obtain the device random/long address (C4/C3/C2)
+                uint32_t long_addr = dali.getRandomAddress(short_addr);
 
-                // Query some info (like min/max level) for logging and capability decisions.
+                // Mark discovered (we may not have a long address)
+                m_addresses[short_addr] = (long_addr != 0 ? long_addr : 0xFFFFFF);
+
                 int16_t min_level = dali.lamp.getMinLevel(short_addr);
                 int16_t max_level = dali.lamp.getMaxLevel(short_addr);
-                DALI_LOGI("  short=%.2x min=%d max=%d", short_addr, (int)min_level, (int)max_level);
+                DALI_LOGI("  short=%.2x long=0x%.6x min=%d max=%d", short_addr, long_addr, (int)min_level, (int)max_level);
 
-                // Create dynamic light component. Use short_addr as fallback for unique id.
-                create_light_component(short_addr, (uint32_t)short_addr);
+                // Create dynamic light component using long_addr if available, else short_addr fallback.
+                create_light_component(short_addr, long_addr);
             }
 
             // Small settle delay
@@ -100,27 +101,27 @@ void esphome::dali::DaliBusComponent::setup() {
     }
 }
 
-// Create a light component for discovered device
-void esphome::dali::DaliBusComponent::create_light_component(short_addr_t short_addr, uint32_t long_addr) {
+void DaliBusComponent::create_light_component(short_addr_t short_addr, uint32_t long_addr) {
 #ifdef USE_LIGHT
     DaliLight* dali_light = new DaliLight { this };
     dali_light->set_address(short_addr);
 
-    const int MAX_STR_LEN = 24;
+    const int MAX_STR_LEN = 32;
     char* name = new char[MAX_STR_LEN];
     char* id = new char[MAX_STR_LEN];
 
-    // Name and id include the short address so each dynamic component is unique
-    snprintf(name, MAX_STR_LEN, "DALI Light %d", short_addr);
+    // Name and id include the long address when available for uniqueness
     if (long_addr != 0) {
+        snprintf(name, MAX_STR_LEN, "DALI Light %.2x", short_addr);
         snprintf(id, MAX_STR_LEN, "dali_light_%.6x", long_addr);
     } else {
-        // Fallback: use short address in id
-        snprintf(id, MAX_STR_LEN, "dali_light_%.2x", short_addr);
+        snprintf(name, MAX_STR_LEN, "DALI Light %.2x", short_addr);
+        snprintf(id, MAX_STR_LEN, "dali_light_sa%.2x", short_addr);
     }
     // NOTE: Not freeing these strings, they will be owned by LightState.
 
     auto* light_state = new light::LightState { dali_light };
+    light_state->set_component_source("light");
     App.register_light(light_state);
     App.register_component(light_state);
     light_state->set_name(name);
@@ -135,19 +136,11 @@ void esphome::dali::DaliBusComponent::create_light_component(short_addr_t short_
 #endif
 }
 
-// Empty loop() (present because header declares it virtual)
-void esphome::dali::DaliBusComponent::loop() {
-    // Nothing periodic required in this implementation currently.
-}
+void DaliBusComponent::loop() { }
 
-// Empty dump_config() (present because header declares it virtual)
-void esphome::dali::DaliBusComponent::dump_config() {
-    // Could print configuration info here for debugging.
-}
+void DaliBusComponent::dump_config() { }
 
-// Bit timing helpers and low level IO
-
-void esphome::dali::DaliBusComponent::writeBit(bool bit) {
+void DaliBusComponent::writeBit(bool bit) {
     // NOTE: output is inverted - HIGH will pull the bus to 0V (logic low)
     bit = !bit;
     if (m_txPin)
@@ -158,14 +151,14 @@ void esphome::dali::DaliBusComponent::writeBit(bool bit) {
     delayMicroseconds(HALF_BIT_PERIOD-6);
 }
 
-void esphome::dali::DaliBusComponent::writeByte(uint8_t b) {
+void DaliBusComponent::writeByte(uint8_t b) {
     for (int i = 0; i < 8; i++) {
         writeBit(b & 0x80);
         b <<= 1;
     }
 }
 
-uint8_t esphome::dali::DaliBusComponent::readByte() {
+uint8_t DaliBusComponent::readByte() {
     uint8_t byte = 0;
     for (int i = 0; i < 8; i++) {
         byte <<= 1;
@@ -175,7 +168,7 @@ uint8_t esphome::dali::DaliBusComponent::readByte() {
     return byte;
 }
 
-void esphome::dali::DaliBusComponent::resetBus() {
+void DaliBusComponent::resetBus() {
     DALI_LOGD("Resetting bus");
     if (m_txPin)
         m_txPin->digital_write(HIGH);
@@ -184,8 +177,7 @@ void esphome::dali::DaliBusComponent::resetBus() {
         m_txPin->digital_write(LOW);
 }
 
-// Implement the virtual methods declared in dali.h / esphome_dali.h
-void esphome::dali::DaliBusComponent::sendForwardFrame(uint8_t address, uint8_t data) {
+void DaliBusComponent::sendForwardFrame(uint8_t address, uint8_t data) {
     if (DEBUG_LOG_RXTX) DALI_LOGD("TX: addr=0x%02x data=0x%02x", address, data);
 
     // START bit
@@ -203,7 +195,7 @@ void esphome::dali::DaliBusComponent::sendForwardFrame(uint8_t address, uint8_t 
     delayMicroseconds(BIT_PERIOD * 4);
 }
 
-uint8_t esphome::dali::DaliBusComponent::receiveBackwardFrame(unsigned long timeout_ms) {
+uint8_t DaliBusComponent::receiveBackwardFrame(unsigned long timeout_ms) {
     unsigned long startTime = millis();
 
     // Wait for START bit (line goes high for start)
