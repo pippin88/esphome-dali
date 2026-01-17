@@ -901,8 +901,16 @@ public:
         this->active_addr = short_addr;
     }
 
+    // OLD isDevicePresent
+   // bool isDevicePresent(short_addr_t short_addr) {
+   //     return (port.sendQueryCommand(short_addr, DaliCommand::QUERY_CONTROL_GEAR_PRESENT) != 0);
+   // }
+
     bool isDevicePresent(short_addr_t short_addr) {
-        return (port.sendQueryCommand(short_addr, DaliCommand::QUERY_CONTROL_GEAR_PRESENT) != 0);
+        // Only treat device as present when the control-gear query returns 0xFF,
+        // which indicates an affirmative response on many DALI devices.
+        // This avoids false positives from noisy/floating RX reads.
+        return (port.sendQueryCommand(short_addr, DaliCommand::QUERY_CONTROL_GEAR_PRESENT) == 0xFF);
     }
 
     void reset(short_addr_t short_addr) {
