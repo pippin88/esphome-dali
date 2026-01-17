@@ -42,6 +42,8 @@ public:
 
     // Runtime setters called by codegen (from YAML)
     void set_rx_pull(RxPullMode pull) { m_rx_pull = pull; }
+    // Tolerant overload: accept integer from Python codegen
+    void set_rx_pull(int v) { m_rx_pull = static_cast<RxPullMode>(v); }
     void set_debug_rxtx(bool v) { m_debug_rxtx = v; }
 
     float get_setup_priority() const override { return setup_priority::HARDWARE; }
