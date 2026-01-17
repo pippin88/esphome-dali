@@ -4,12 +4,10 @@
 #include "esphome_dali.h"
 #include "esphome_dali_light.h"
 
-//static const char *const TAG = "dali";
-// DEBUG controlled via build flag DALI_DEBUG_RXTX (set in YAML build_flags)
-#ifndef DALI_DEBUG_RXTX
-#define DALI_DEBUG_RXTX 0
-#endif
-static const bool DEBUG_LOG_RXTX = (DALI_DEBUG_RXTX != 0);
+// Force enable DALI RX/TX debug logging
+#undef DALI_DEBUG_RXTX
+#define DALI_DEBUG_RXTX 1
+static const bool DEBUG_LOG_RXTX = true;
 
 using namespace esphome;
 using namespace dali;
