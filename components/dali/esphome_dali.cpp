@@ -4,10 +4,11 @@
 #include "esphome_dali.h"
 #include "esphome_dali_light.h"
 
-// Force enable DALI RX/TX debug logging
-#undef DALI_DEBUG_RXTX
-#define DALI_DEBUG_RXTX 1
-static const bool DEBUG_LOG_RXTX = true;
+// DEBUG controlled via macro or edit below
+#ifndef DALI_DEBUG_RXTX
+#define DALI_DEBUG_RXTX 0
+#endif
+static const bool DEBUG_LOG_RXTX = (DALI_DEBUG_RXTX != 0);
 
 using namespace esphome;
 using namespace dali;
@@ -20,15 +21,16 @@ void DaliBusComponent::setup() {
     // TX as output
     if (m_txPin) {
         m_txPin->pin_mode(gpio::Flags::FLAG_OUTPUT);
-        // Ensure default output state (inverted logic)
-        m_txPin->digital_write(LOW);
+        // Ensure default output state (inverted logic used here).
+        // For the optocoupler style DALI interface we must RELEASE the bus when idle.
+        // Releasing = HIGH for these adapters.
+        m_txPin->digital_write(HIGH);
     }
 
-    // Configure RX as plain input (no internal pull). Many DALI adapters
-    // already provide a bias; internal pull-ups on some S3 boards can
-    // interfere with backward-frame detection.
+    // Configure RX with a pull-down so the input is not left floating.
+    // If your DALI adapter already provides a pull/bias, set to FLAG_INPUT instead.
     if (m_rxPin) {
-        m_rxPin->pin_mode(gpio::Flags::FLAG_INPUT);
+        m_rxPin->pin_mode(gpio::Flags::FLAG_INPUT | gpio::Flags::FLAG_PULLDOWN);
     }
 
     DALI_LOGI("DALI bus ready");
@@ -61,15 +63,23 @@ void DaliBusComponent::setup() {
                 continue;
             }
 
-            // Probe the short address (QUERY_CONTROL_GEAR_PRESENT). DaliMaster::isDevicePresent
-            // should return 0xFF for a positive response.
+            // First-level probe: isDevicePresent (requires a specific affirmative reply)
             if (!dali.isDevicePresent(short_addr)) {
-                DALI_LOGD("No device at short address %.2x", short_addr);
+                DALI_LOGD("No device at short address %.2x (no affirmative present reply)", short_addr);
                 continue;
             }
 
-            // Device responded positively
-            DALI_LOGI("Found device at short address %.2x", short_addr);
+            // Second-level confirmation: query a capability (min level).
+            // A noisy RX that returns all 1s will often return 0xFF for queries;
+            // treat values outside the valid 0..254 range as non-present.
+            int16_t min_level = dali.lamp.getMinLevel(short_addr);
+            if (min_level < 0 || min_level > 254) {
+                DALI_LOGW("Probe at short address %.2x returned invalid min_level=%d - ignoring (likely noise)", short_addr, (int)min_level);
+                continue;
+            }
+
+            // We have a confirmed device
+            DALI_LOGI("Found device at short address %.2x (min=%d)", short_addr, (int)min_level);
 
             // If already known, warn of duplicate
             if (m_addresses[short_addr]) {
@@ -79,10 +89,9 @@ void DaliBusComponent::setup() {
                 // Try to obtain the device random/long address (C4/C3/C2)
                 uint32_t long_addr = dali.getRandomAddress(short_addr);
 
-                // Mark discovered (we may not have a long address)
+                // Mark discovered; use long_addr when available
                 m_addresses[short_addr] = (long_addr != 0 ? long_addr : 0xFFFFFF);
 
-                int16_t min_level = dali.lamp.getMinLevel(short_addr);
                 int16_t max_level = dali.lamp.getMaxLevel(short_addr);
                 DALI_LOGI("  short=%.2x long=0x%.6x min=%d max=%d", short_addr, long_addr, (int)min_level, (int)max_level);
 
