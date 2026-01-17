@@ -5,7 +5,11 @@
 #include "esphome_dali_light.h"
 
 //static const char *const TAG = "dali";
-static const bool DEBUG_LOG_RXTX = false; // NOTE: Will probably trigger WDT
+// DEBUG controlled via build flag DALI_DEBUG_RXTX (set in YAML build_flags)
+#ifndef DALI_DEBUG_RXTX
+#define DALI_DEBUG_RXTX 0
+#endif
+static const bool DEBUG_LOG_RXTX = (DALI_DEBUG_RXTX != 0);
 
 using namespace esphome;
 using namespace dali;
