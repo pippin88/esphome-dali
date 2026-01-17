@@ -26,6 +26,17 @@ static void IRAM_ATTR dali_timer_isr() {
     ::dali.timer();
 }
 
+// ISR-safe wrappers (file scope)
+static uint8_t IRAM_ATTR dali_bus_is_high_wrapper() {
+    return gpio_get_level(RAW_RX_GPIO) ? 1 : 0;
+}
+static void IRAM_ATTR dali_bus_set_low_wrapper() {
+    gpio_set_level(RAW_TX_GPIO, 0);
+}
+static void IRAM_ATTR dali_bus_set_high_wrapper() {
+    gpio_set_level(RAW_TX_GPIO, 1);
+}
+
 void DaliBusComponent::setup() {
     const bool DEBUG_LOG_RXTX = this->m_debug_rxtx ? true : DEFAULT_DEBUG_LOG_RXTX;
 
@@ -39,13 +50,13 @@ void DaliBusComponent::setup() {
     // Configure RX pin with selected pull
     if (m_rxPin) {
         switch (m_rx_pull) {
-            case RxPullMode::PULLUP_MODE:
+            case RxPullMode::RX_PULL_UP:
                 m_rxPin->pin_mode(gpio::Flags::FLAG_INPUT | gpio::Flags::FLAG_PULLUP);
                 break;
-            case RxPullMode::PULLDOWN_MODE:
+            case RxPullMode::RX_PULL_DOWN:
                 m_rxPin->pin_mode(gpio::Flags::FLAG_INPUT | gpio::Flags::FLAG_PULLDOWN);
                 break;
-            case RxPullMode::NONE:
+            case RxPullMode::RX_PULL_NONE:
             default:
                 m_rxPin->pin_mode(gpio::Flags::FLAG_INPUT);
                 break;
@@ -64,46 +75,12 @@ void DaliBusComponent::setup() {
         DALI_LOGW("Failed to start DALI sampling timer");
     }
 
-    // Initialize qqqlab Dali library so it can use the bus HAL via the callbacks.
-    // The library's begin() expects function pointers; we'll provide small wrappers that use raw gpio for ISR-safety.
-    // Define the three callbacks as C functions referencing raw gpio pins:
-
-    static auto bus_is_high_cb = []() -> uint8_t {
-        // Use raw gpio_get_level (ESP-IDF) which is ISR safe
-        return gpio_get_level(RAW_RX_GPIO) ? 1 : 0;
-    };
-    static auto bus_set_low_cb = []() {
-        gpio_set_level(RAW_TX_GPIO, 0);
-    };
-    static auto bus_set_high_cb = []() {
-        gpio_set_level(RAW_TX_GPIO, 1);
-    };
-
-    // The Dali::begin takes function pointers; get C-style pointers to small static functions:
-    // Create wrapper functions with C linkage so we can pass their addresses.
-    // (We do this once and pass the pointers.)
-    // Implement small static functions:
-    static uint8_t IRAM_ATTR dali_bus_is_high_wrapper() {
-        return gpio_get_level(RAW_RX_GPIO) ? 1 : 0;
-    }
-    static void IRAM_ATTR dali_bus_set_low_wrapper() {
-        gpio_set_level(RAW_TX_GPIO, 0);
-    }
-    static void IRAM_ATTR dali_bus_set_high_wrapper() {
-        gpio_set_level(RAW_TX_GPIO, 1);
-    }
-
     // Initialize the library with the ISR-safe wrappers
-    ::dali.begin(&dali_bus_is_high_wrapper, &dali_bus_set_high_wrapper, &dali_bus_set_low_wrapper);
+    // Note: Dali::begin expects (bus_is_high, bus_set_low, bus_set_high)
+    ::dali.begin(&dali_bus_is_high_wrapper, &dali_bus_set_low_wrapper, &dali_bus_set_high_wrapper);
 
     // Discovery (optional)
     if (m_discovery) {
-        if (::dali.bus_manager.isControlGearPresent()) {
-            DALI_LOGD("Detected control gear on bus");
-        } else {
-            DALI_LOGW("No control gear detected on bus!");
-        }
-
         DALI_LOGI("Begin device discovery via short-address scan...");
 
         bool duplicate_detected = false;
@@ -119,7 +96,7 @@ void DaliBusComponent::setup() {
                 continue;
             }
 
-            // First-level probe: isDevicePresent (uses dali library)
+            // First-level probe: dali.isDevicePresent()
             if (!dali.isDevicePresent(short_addr)) {
                 DALI_LOGD("No device at short address %.2x (no affirmative present reply)", short_addr);
                 continue;
@@ -166,20 +143,16 @@ void DaliBusComponent::resetBus() {
     if (m_txPin) m_txPin->digital_write(LOW);
 }
 
-// send a forward frame (address + data) using the qqqlab library
+// send a forward frame (address + data) using the qqqlab library API (addr+data)
 void DaliBusComponent::sendForwardFrame(uint8_t address, uint8_t data) {
-    uint8_t bytes[2];
-    bytes[0] = address;
-    bytes[1] = data;
-
     if (m_debug_rxtx) {
         DALI_LOGD("TX: addr=0x%02x data=0x%02x (via library tx_wait)", address, data);
     }
 
-    // Use the library's blocking transmit (16 bits)
-    int rv = ::dali.tx_wait(bytes, 16, 500);
-    if (rv != DALI_OK) {
-        DALI_LOGW("dali.tx_wait returned %d", rv);
+    // Use the library's blocking transmit that takes address+data
+    bool ok = ::dali.tx_wait(address, data, 500);
+    if (!ok) {
+        DALI_LOGW("dali.tx_wait returned failure for addr=0x%02x data=0x%02x", address, data);
     }
 }
 
@@ -213,10 +186,9 @@ uint8_t DaliBusComponent::receiveBackwardFrame(unsigned long timeout_ms) {
                 // other unexpected values - continue
                 break;
         }
-        delayMicroseconds(100); // small yield so we don't spin too tight
+        delayMicroseconds(100);
     }
 
-    // timeout
     if (m_debug_rxtx) DALI_LOGD("receiveBackwardFrame timeout");
     return 0;
 }
@@ -231,7 +203,6 @@ void DaliBusComponent::dump_config() {
    They are not used for backward-frame decoding anymore. */
 
 void DaliBusComponent::writeBit(bool bit) {
-    // For compatibility we keep previous bit-bang semantics (not used by library)
     if (m_txPin)
         m_txPin->digital_write(bit ? LOW : HIGH);
     delayMicroseconds(416);
