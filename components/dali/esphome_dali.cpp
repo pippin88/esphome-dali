@@ -1,4 +1,3 @@
- url=https://github.com/pippin88/esphome-dali/blob/master/components/dali/esphome_dali.cpp
 #include <esphome.h>
 #include <esp_task_wdt.h>
 #include "esphome_dali.h"
