@@ -884,32 +884,13 @@ public:
     { }
 
 public:
-    // /// @brief Set brightness via Direct Arc Power Control (DAPC)
-    // /// @remark P = 10^((level-1)/(253/3)) * P_100%/1000 (exponential curve)
-    // /// @param short_addr Device or group short address, or ADDR_BROADCAST
-    // /// @param level min..max. or, 0->min  255->stop fading
-    // void setBrightness(short_addr_t addr, uint8_t brightness) {
-    //     Serial.print("DALI: Brightness="); 
-    //     if (brightness == 0) Serial.println("MIN");
-    //     else if (brightness == 0xFF) Serial.println("STOP");
-    //     else Serial.println(brightness);
-        
-    //     port.sendForwardFrame((addr << 1), brightness);
-    // }
+    // public APIs...
+    void setActiveAddress(short_addr_t short_addr) { this->active_addr = short_addr; }
 
-    void setActiveAddress(short_addr_t short_addr) {
-        this->active_addr = short_addr;
-    }
-
-    // OLD isDevicePresent
-   // bool isDevicePresent(short_addr_t short_addr) {
-   //     return (port.sendQueryCommand(short_addr, DaliCommand::QUERY_CONTROL_GEAR_PRESENT) != 0);
-   // }
-
+    // Presence check: require explicit 0xFF response for QUERY_CONTROL_GEAR_PRESENT
     bool isDevicePresent(short_addr_t short_addr) {
-        // Only treat device as present when the control-gear query returns 0xFF,
-        // which indicates an affirmative response on many DALI devices.
-        // This avoids false positives from noisy/floating RX reads.
+        // Many DALI devices return 0xFF for QUERY_CONTROL_GEAR_PRESENT when present.
+        // Requiring exact 0xFF avoids treating spurious non-zero samples as devices.
         return (port.sendQueryCommand(short_addr, DaliCommand::QUERY_CONTROL_GEAR_PRESENT) == 0xFF);
     }
 
@@ -927,6 +908,21 @@ public:
     /// @param short_addr Device short address
     void identifyDevice(short_addr_t short_addr) {
         port.sendControlCommand(short_addr, DaliCommand::IDENTIFY_DEVICE);
+    }
+
+    // New helper: read the randomly-generated long/random address from the device (C4/C3/C2)
+    // Returns 0 if no valid response (i.e., no random address available)
+    uint32_t getRandomAddress(short_addr_t short_addr) {
+        uint8_t low  = port.sendQueryCommand(short_addr, DaliCommand::QUERY_RANDOM_ADDRESS_L);
+        uint8_t mid  = port.sendQueryCommand(short_addr, DaliCommand::QUERY_RANDOM_ADDRESS_M);
+        uint8_t high = port.sendQueryCommand(short_addr, DaliCommand::QUERY_RANDOM_ADDRESS_H);
+
+        // If all bytes are zero, treat as no long address available (0 is ambiguous on some devices,
+        // but this matches the Arduino behavior of checking for a non-error response).
+        if (low == 0 && mid == 0 && high == 0) {
+            return 0;
+        }
+        return ((uint32_t)high << 16) | ((uint32_t)mid << 8) | (uint32_t)low;
     }
 
     void dumpStatusForDevice(uint8_t addr);
