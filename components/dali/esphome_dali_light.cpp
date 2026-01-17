@@ -1,4 +1,3 @@
-
 #include <esphome.h>
 #include "esphome_dali_light.h"
 #include "esphome/core/log.h"
@@ -72,9 +71,6 @@ void dali::DaliLight::setup_state(light::LightState *state) {
                 bus->dali.lamp.setFadeTime(0, this->fade_time_.value());
             }
 
-            // bus->dali.lamp.setMinLevel(address_, 1);
-            // bus->dali.lamp.setMaxLevel(address_, 254);
-
             // Query the actual brightness level of the device and 
             // ensure this is reflected in the ESPHome component itself...
             LightStateRTCState lstate;
@@ -100,89 +96,48 @@ void dali::DaliLight::setup_state(light::LightState *state) {
         else {
             ESP_LOGW(TAG, "DALI device at addr %.2x not found!", address_);
         }
-
-        //bus->dali.dumpStatusForDevice(address_);
     }
     else {
         // TODO: How do we detect color temperature support for broadcast and group addresses?
     }
-
-
-    // if (this->color_mode_.has_value()) {
-    //     if (this->color_mode_.value() == DaliColorMode::COLOR_TEMPERATURE) {
-    //         tc_supported_ = true;
-    //         ESP_LOGD(TAG, "Override: enable color temperature support");
-    //     } else {
-    //         tc_supported_ = false;
-    //         ESP_LOGD(TAG, "Override: disable color temperature support");
-    //     }
-    // }
 }
 
 light::LightTraits dali::DaliLight::get_traits() {
+    // NOTE: This is called repeatedly, do not perform any bus queries here...
     light::LightTraits traits;
 
-    // NOTE: This is called repeatedly, do not perform any bus queries here...
-
     // Force a color mode irrespective of what the device itself says it supports
-    // eg. you can convert a CT capable device to a plain brighness device,
-    // or force colour temperature support and hope the device recognizes the command...
-    /*    ORIGINAL @jorticus:
     if (this->color_mode_.has_value()) {
         switch (this->color_mode_.value()) {
-            case DaliColorMode::COLOR_TEMPERATURE: 
+            case DaliColorMode::COLOR_TEMPERATURE:
                 this->tc_supported_ = true;
-                traits.set_supported_color_modes({light::ColorMode::COLOR_TEMPERATURE});
+                traits.set_supported_color_modes({ light::ColorMode::COLOR_TEMPERATURE });
                 traits.set_min_mireds(this->cold_white_temperature_);
                 traits.set_max_mireds(this->warm_white_temperature_);
                 break;
             case DaliColorMode::BRIGHTNESS:
                 this->tc_supported_ = false;
-                traits.set_supported_color_modes({light::ColorMode::BRIGHTNESS});
+                traits.set_supported_color_modes({ light::ColorMode::BRIGHTNESS });
                 break;
             case DaliColorMode::ON_OFF:
                 this->tc_supported_ = false;
-                traits.set_supported_color_modes({light::ColorMode::ON_OFF});
+                traits.set_supported_color_modes({ light::ColorMode::ON_OFF });
                 break;
         }
     }
     else {
         // Device reports color temperature support
         if (this->tc_supported_) {
-            traits.set_supported_color_modes({light::ColorMode::COLOR_TEMPERATURE});
+            traits.set_supported_color_modes({ light::ColorMode::COLOR_TEMPERATURE });
             traits.set_min_mireds(this->cold_white_temperature_);
             traits.set_max_mireds(this->warm_white_temperature_);
         }
         else {
-            traits.set_supported_color_modes({light::ColorMode::BRIGHTNESS});
+            traits.set_supported_color_modes({ light::ColorMode::BRIGHTNESS });
         }
     }
 
     return traits;
-    */
-
-    //********** Github Copilot update
-    // Modern ESPHome requires set_supported_color_modes()
-    light::LightTraits traits;
-
-    // Always support simple brightness mode
-    traits.set_supported_color_modes({ light::ColorMode::BRIGHTNESS });
-
-    // If the device supports colour temperature, expose it as well
-    if (this->tc_supported_) {
-        // add_supported_color_mode appends another supported mode
-        traits.add_supported_color_mode(light::ColorMode::COLOR_TEMPERATURE);
-        traits.set_min_mireds(this->warm_white_temperature_);
-        traits.set_max_mireds(this->cold_white_temperature_);
-    }
-
-    // set default min/max as needed (optional)
-    traits.set_default_transition_length(this->fade_time_);
-
-    return traits;
-
-    //********** End Github Copilot update
-    
 }
 
 void dali::DaliLight::write_state(light::LightState *state) {
@@ -195,7 +150,6 @@ void dali::DaliLight::write_state(light::LightState *state) {
     state->current_values_as_binary(&on);
     if (!on) {
         // Short cut: send power off command
-        //bus->dali.lamp.turnOff(address_); // no fade
         bus->dali.lamp.setBrightness(address_, 0); // fade
         return;
     }
@@ -204,7 +158,6 @@ void dali::DaliLight::write_state(light::LightState *state) {
         state->current_values_as_ct(&color_temperature, &brightness);
 
         // Map temperature 0..1 to reported TC coolest/warmest mireds
-        // NOTE: Not using the configuration warm/cool colours - these may not match the reported range of the DALI device.
         float color_temperature_mired = (color_temperature * (dali_tc_warmest_ - dali_tc_coolest_)) + dali_tc_coolest_;
 
         uint16_t dali_color_temperature = static_cast<uint16_t>(color_temperature_mired);
