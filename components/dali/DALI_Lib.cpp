@@ -153,7 +153,9 @@ void Dali::rx_timer_handler() {
         case RX_DATA_BIT_FIRST_HALF:
             m_rx_sample_count++;
             
-            // Sample at mid-point of first half (after incrementing, sample 3 of 8)
+            // Sample at mid-point of first half
+            // First half: samples 1-4, mid-point at sample 2-3
+            // After increment above, m_rx_sample_count==3 means we're at the 3rd sample (0-indexed: sample 2)
             if (m_rx_sample_count == 3) {
                 m_rx_first_half_sample = bus_high;
             }
@@ -167,7 +169,9 @@ void Dali::rx_timer_handler() {
         case RX_DATA_BIT_SECOND_HALF:
             m_rx_sample_count++;
             
-            // Sample at mid-point of second half (after incrementing, sample 7 of 8)
+            // Sample at mid-point of second half
+            // Second half: samples 5-8, mid-point at sample 6-7
+            // After increment above, m_rx_sample_count==7 means we're at the 7th sample (0-indexed: sample 6)
             if (m_rx_sample_count == 7) {
                 bool second_half_sample = bus_high;
                 
