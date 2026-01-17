@@ -16,13 +16,10 @@ CONF_RX_PULL = 'rx_pull'
 dali_ns = cg.esphome_ns.namespace('dali')
 dali_lib_ns = cg.global_ns
 DaliBusComponent = dali_ns.class_('DaliBusComponent', cg.Component)
-RxPullMode = dali_ns.enum('RxPullMode')
 
-RX_PULL_MODES = {
-    'NONE': RxPullMode.NONE,
-    'PULLUP': RxPullMode.PULLUP,
-    'PULLDOWN': RxPullMode.PULLDOWN,
-}
+# simple enum mapping for rx pull - we pass an int to the generated C++ setter
+RxPullMode = dali_ns.enum('RxPullMode')
+# Note: The C++ enum names are NONE, PULLUP_MODE, PULLDOWN_MODE
 
 CONFIG_SCHEMA = cv.Schema({
     cv.GenerateID(): cv.declare_id(DaliBusComponent),
@@ -31,7 +28,7 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Optional(CONF_DISCOVERY): cv.All(cv.requires_component("light"), cv.boolean),
     cv.Optional(CONF_INITIALIZE_ADDRESSES): cv.boolean,
     cv.Optional(CONF_DEBUG_RXTX, default=False): cv.boolean,
-    cv.Optional(CONF_RX_PULL, default='PULLDOWN'): cv.enum(RX_PULL_MODES, upper=True),
+    cv.Optional(CONF_RX_PULL, default="pulldown"): cv.OneOf("none", "pullup", "pulldown"),
 }).extend(cv.COMPONENT_SCHEMA)
 
 async def to_code(config: OrderedDict):
@@ -44,14 +41,23 @@ async def to_code(config: OrderedDict):
     tx_pin = await cg.gpio_pin_expression(config[CONF_TX_PIN])
     cg.add(var.set_tx_pin(tx_pin))
 
-    # Set debug_rxtx option
-    cg.add(var.set_debug_rxtx(config[CONF_DEBUG_RXTX]))
-    
-    # Set rx_pull option
-    cg.add(var.set_rx_pull(config[CONF_RX_PULL]))
-
     if config.get(CONF_DISCOVERY, False):
         cg.add(var.do_device_discovery())
 
+        CORE.register_platform_component("light", bus)
+
     if config.get(CONF_INITIALIZE_ADDRESSES, False):
         cg.add(var.do_initialize_addresses())
+
+    # debug rxtx runtime flag
+    if CONF_DEBUG_RXTX in config:
+        cg.add(var.set_debug_rxtx(config[CONF_DEBUG_RXTX]))
+
+    # rx_pull mapping
+    rx_pull = config.get(CONF_RX_PULL, "pulldown")
+    if rx_pull == "none":
+        cg.add(var.set_rx_pull(dali_ns.RxPullMode.NONE))
+    elif rx_pull == "pullup":
+        cg.add(var.set_rx_pull(dali_ns.RxPullMode.PULLUP_MODE))
+    else:
+        cg.add(var.set_rx_pull(dali_ns.RxPullMode.PULLDOWN_MODE))
