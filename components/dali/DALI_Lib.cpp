@@ -153,8 +153,8 @@ void Dali::rx_timer_handler() {
         case RX_DATA_BIT_FIRST_HALF:
             m_rx_sample_count++;
             
-            // Sample at mid-point of first half (sample 2 of 8)
-            if (m_rx_sample_count == 2) {
+            // Sample at mid-point of first half (after incrementing, sample 3 of 8)
+            if (m_rx_sample_count == 3) {
                 m_rx_first_half_sample = bus_high;
             }
             
@@ -167,8 +167,8 @@ void Dali::rx_timer_handler() {
         case RX_DATA_BIT_SECOND_HALF:
             m_rx_sample_count++;
             
-            // Sample at mid-point of second half (sample 6 of 8)
-            if (m_rx_sample_count == 6) {
+            // Sample at mid-point of second half (after incrementing, sample 7 of 8)
+            if (m_rx_sample_count == 7) {
                 bool second_half_sample = bus_high;
                 
                 // Manchester decoding: compare first and second half

@@ -11,6 +11,9 @@ using namespace dali;
 
 // Static variables for ISR access
 // Using fixed GPIO pins for ESP32-S3: TX=17, RX=14
+// Note: These are hardcoded for this implementation to avoid relying on
+// GPIOPin internal APIs during ISR. A future enhancement could map YAML-specified
+// pins to raw GPIO numbers dynamically while maintaining ISR safety.
 static volatile gpio_num_t s_tx_gpio = GPIO_NUM_17;
 static volatile gpio_num_t s_rx_gpio = GPIO_NUM_14;
 static DaliBusComponent* s_bus_component = nullptr;
