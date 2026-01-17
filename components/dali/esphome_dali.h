@@ -2,6 +2,7 @@
 
 #include <esphome.h>
 #include "dali.h"
+#include "DALI_Lib.h"
 
 namespace esphome {
 namespace dali {
@@ -10,6 +11,12 @@ enum class DaliInitMode {
     DiscoverOnly,
     InitializeUnassigned,
     InitializeAll
+};
+
+enum class RxPullMode {
+    NONE,
+    PULLUP,
+    PULLDOWN
 };
 
 class DaliBusComponent : public Component, public DaliPort {
@@ -26,6 +33,10 @@ public:
     // Use the generated GPIOPin type (unqualified)
     void set_tx_pin(GPIOPin* tx_pin) { m_txPin = tx_pin; }
     void set_rx_pin(GPIOPin* rx_pin) { m_rxPin = rx_pin; }
+
+    // Configuration setters for YAML options
+    void set_debug_rxtx(bool debug) { m_debug_rxtx = debug; }
+    void set_rx_pull(RxPullMode pull) { m_rx_pull = pull; }
 
     /// @brief Perform automatic device discovery on setup.
     /// Light components will automatically be created and appear in HomeAssistant
@@ -61,14 +72,29 @@ private:
     uint8_t readByte();
 
     void create_light_component(short_addr_t short_addr, uint32_t long_addr);
+    
+    // Timer ISR setup
+    void setup_timer();
+    static void IRAM_ATTR timer_isr();
 
     // Generated pin type
     GPIOPin* m_rxPin{nullptr};
     GPIOPin* m_txPin{nullptr};
 
+    // Raw GPIO numbers for ISR-safe access
+    gpio_num_t m_tx_gpio_num;
+    gpio_num_t m_rx_gpio_num;
+
     bool m_discovery = false;
     DaliInitMode m_initialize_addresses = DaliInitMode::DiscoverOnly;
     uint32_t m_addresses[ADDR_SHORT_MAX+1] = {0};
+    
+    // Configuration options
+    bool m_debug_rxtx = false;
+    RxPullMode m_rx_pull = RxPullMode::PULLDOWN;
+    
+    // Hardware timer handle
+    hw_timer_t* m_timer = nullptr;
 };
 
 } // namespace dali

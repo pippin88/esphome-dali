@@ -1,39 +1,86 @@
 
 #include <esphome.h>
 #include <esp_task_wdt.h>
+#include <driver/gpio.h>
 #include "esphome_dali.h"
 #include "esphome_dali_light.h"
-
-// Force enable DALI RX/TX debug logging for this debug run
-#undef DALI_DEBUG_RXTX
-#define DALI_DEBUG_RXTX 1
-static const bool DEBUG_LOG_RXTX = true;
-
+#include "DALI_Lib.h"
 
 using namespace esphome;
 using namespace dali;
 
+// Static variables for ISR access
+static volatile gpio_num_t s_tx_gpio = GPIO_NUM_NC;
+static volatile gpio_num_t s_rx_gpio = GPIO_NUM_NC;
+static DaliBusComponent* s_bus_component = nullptr;
+
+// ISR-safe GPIO wrapper functions for DALI library
+static bool IRAM_ATTR bus_is_high() {
+    if (s_rx_gpio == GPIO_NUM_NC) return true;
+    return gpio_get_level(s_rx_gpio) != 0;
+}
+
+static void IRAM_ATTR bus_set_high() {
+    if (s_tx_gpio == GPIO_NUM_NC) return;
+    gpio_set_level(s_tx_gpio, 1);
+}
+
+static void IRAM_ATTR bus_set_low() {
+    if (s_tx_gpio == GPIO_NUM_NC) return;
+    gpio_set_level(s_tx_gpio, 0);
+}
+
+// Timer constants (kept for reference but replaced with library implementation)
 #define QUARTER_BIT_PERIOD 208
 #define HALF_BIT_PERIOD 416
 #define BIT_PERIOD 833
 
 void DaliBusComponent::setup() {
-    // TX as output
+    // Store reference for ISR access
+    s_bus_component = this;
+    
+    // Get raw GPIO numbers for ISR-safe access
     if (m_txPin) {
+        m_tx_gpio_num = (gpio_num_t)m_txPin->get_pin();
+        s_tx_gpio = m_tx_gpio_num;
+        
+        // Configure TX pin as output
         m_txPin->pin_mode(gpio::Flags::FLAG_OUTPUT);
-        // Ensure default output state (inverted logic used here).
-        // For the optocoupler style DALI interface we must RELEASE the bus when idle.
-        // Releasing = HIGH for these adapters.
+        // Ensure default output state: HIGH = bus released (idle)
         m_txPin->digital_write(HIGH);
+        gpio_set_level(m_tx_gpio_num, 1);
     }
 
-    // Configure RX with a pull-down so the input is not left floating.
-    // If your DALI adapter already provides a pull/bias, set to FLAG_INPUT instead.
+    // Configure RX pin with user-specified pull mode
     if (m_rxPin) {
-        m_rxPin->pin_mode(gpio::Flags::FLAG_INPUT | gpio::Flags::FLAG_PULLDOWN);
+        m_rx_gpio_num = (gpio_num_t)m_rxPin->get_pin();
+        s_rx_gpio = m_rx_gpio_num;
+        
+        gpio::Flags rx_flags = gpio::Flags::FLAG_INPUT;
+        switch (m_rx_pull) {
+            case RxPullMode::PULLUP:
+                rx_flags = rx_flags | gpio::Flags::FLAG_PULLUP;
+                DALI_LOGD("RX pin configured with PULLUP");
+                break;
+            case RxPullMode::PULLDOWN:
+                rx_flags = rx_flags | gpio::Flags::FLAG_PULLDOWN;
+                DALI_LOGD("RX pin configured with PULLDOWN");
+                break;
+            case RxPullMode::NONE:
+                DALI_LOGD("RX pin configured with no pull");
+                break;
+        }
+        m_rxPin->pin_mode(rx_flags);
     }
 
-    DALI_LOGI("DALI bus ready");
+    // Initialize the DALI library with HAL callbacks
+    ::dali.begin(bus_is_high, bus_set_high, bus_set_low);
+    ::dali.set_debug(m_debug_rxtx);
+    
+    // Setup hardware timer at 9600 Hz (104.167 us period)
+    setup_timer();
+
+    DALI_LOGI("DALI bus ready (timer-driven, debug_rxtx=%d)", m_debug_rxtx);
 
     if (m_discovery) {
         // Optional: reset devices on the bus so we are in a known-good state.
@@ -151,8 +198,34 @@ void DaliBusComponent::loop() { }
 
 void DaliBusComponent::dump_config() { }
 
+// Timer ISR that calls the DALI library's timer handler
+void IRAM_ATTR DaliBusComponent::timer_isr() {
+    ::dali.timer();
+}
+
+// Setup hardware timer at 9600 Hz (104.167 microseconds period)
+void DaliBusComponent::setup_timer() {
+    // Timer 0, divider 80 (1 MHz tick rate on 80 MHz APB clock)
+    m_timer = timerBegin(0, 80, true);
+    if (!m_timer) {
+        DALI_LOGE("Failed to initialize timer!");
+        return;
+    }
+    
+    // Attach ISR
+    timerAttachInterrupt(m_timer, &DaliBusComponent::timer_isr, true);
+    
+    // Set alarm to trigger every 104.167 microseconds (9600 Hz)
+    // 104.167 us = 104 ticks at 1 MHz
+    timerAlarmWrite(m_timer, 104, true);
+    timerAlarmEnable(m_timer);
+    
+    DALI_LOGD("Hardware timer configured at 9600 Hz");
+}
+
+// Legacy bit-bang functions kept for reference (not used with library)
 void DaliBusComponent::writeBit(bool bit) {
-    // NOTE: output is inverted - HIGH will pull the bus to 0V (logic low)
+    // NOTE: Kept for compatibility but not used with timer-driven library
     bit = !bit;
     if (m_txPin)
         m_txPin->digital_write(bit ? LOW : HIGH);
@@ -163,6 +236,7 @@ void DaliBusComponent::writeBit(bool bit) {
 }
 
 void DaliBusComponent::writeByte(uint8_t b) {
+    // NOTE: Kept for compatibility but not used with timer-driven library
     for (int i = 0; i < 8; i++) {
         writeBit(b & 0x80);
         b <<= 1;
@@ -170,63 +244,49 @@ void DaliBusComponent::writeByte(uint8_t b) {
 }
 
 uint8_t DaliBusComponent::readByte() {
+    // NOTE: Kept for compatibility but not used with timer-driven library
     uint8_t byte = 0;
     for (int i = 0; i < 8; i++) {
         byte <<= 1;
         byte |= (m_rxPin ? m_rxPin->digital_read() : 0);
-        delayMicroseconds(BIT_PERIOD); // 1/1200 seconds
+        delayMicroseconds(BIT_PERIOD);
     }
     return byte;
 }
 
 void DaliBusComponent::resetBus() {
     DALI_LOGD("Resetting bus");
-    if (m_txPin)
-        m_txPin->digital_write(HIGH);
+    bus_set_high();
     delay(1000);
-    if (m_txPin)
-        m_txPin->digital_write(LOW);
+    bus_set_low();
 }
 
 void DaliBusComponent::sendForwardFrame(uint8_t address, uint8_t data) {
-    if (DEBUG_LOG_RXTX) DALI_LOGD("TX: addr=0x%02x data=0x%02x", address, data);
-
-    // START bit
-    writeBit(1);
-
-    // address + data
-    writeByte(address);
-    writeByte(data);
-
-    // Drive line low for a short time, then wait required spacing
-    if (m_txPin)
-        m_txPin->digital_write(LOW);
-
-    delayMicroseconds(HALF_BIT_PERIOD * 2);
-    delayMicroseconds(BIT_PERIOD * 4);
+    // Use DALI library tx_wait function instead of bit-banging
+    if (m_debug_rxtx) {
+        DALI_LOGD("TX: addr=0x%02x data=0x%02x", address, data);
+    }
+    
+    // Use library's timer-driven transmission
+    ::dali.tx_wait(address, data, 50);
 }
 
 uint8_t DaliBusComponent::receiveBackwardFrame(unsigned long timeout_ms) {
+    // Use DALI library rx function for passive monitoring
+    uint8_t data = 0;
+    
+    // Wait for a backward frame with timeout
     unsigned long startTime = millis();
-
-    // Wait for START bit (line goes high for start)
-    while (m_rxPin && m_rxPin->digital_read() == LOW) {
-        if (millis() - startTime >= timeout_ms) {
-            return 0;
+    while (millis() - startTime < timeout_ms) {
+        if (::dali.rx(&data) == 8) {
+            if (m_debug_rxtx) {
+                DALI_LOGD("RX: 0x%02x", data);
+            }
+            return data;
         }
-        delay(0);
+        delay(1);
     }
-
-    // Wait to sample first data bit
-    delayMicroseconds(BIT_PERIOD);
-    delayMicroseconds(QUARTER_BIT_PERIOD);
-
-    uint8_t data = readByte();
-    if (DEBUG_LOG_RXTX) DALI_LOGD("RX: 0x%02x", data);
-
-    // Wait for remaining stop bits and minimum spacing before next frame
-    delayMicroseconds(BIT_PERIOD * 2);
-    delayMicroseconds(BIT_PERIOD * 8);
-
-    return data;
+    
+    // Timeout - no frame received
+    return 0;
 }
