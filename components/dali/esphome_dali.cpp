@@ -6,7 +6,7 @@
 
 // Use the qqqlab/Waveshare DALI driver library (already present in repo)
 #include "DALI_Lib.h"
-extern Dali dali; // global object defined by DALI_Lib
+extern Dali dali; // global low-level Dali driver instance
 
 using namespace esphome;
 
@@ -74,11 +74,11 @@ void DaliBusComponent::setup() {
     DALI_LOGW("Failed to start DALI sampling timer");
   }
 
-  // Initialize the library with the ISR-safe wrappers
-  // Note: Dali::begin expects (bus_is_high, bus_set_high, bus_set_low)
+  // Initialize the low-level qqqlab driver with the ISR-safe wrappers
+  // Dali::begin expects (bus_is_high, bus_set_high, bus_set_low)
   ::dali.begin(&dali_bus_is_high_wrapper, &dali_bus_set_high_wrapper, &dali_bus_set_low_wrapper);
 
-  // Discovery (optional)
+  // Discovery (optional) — use the member DaliMaster (this->dali) for high-level queries
   if (m_discovery) {
     DALI_LOGI("Begin device discovery via short-address scan...");
 
@@ -95,14 +95,14 @@ void DaliBusComponent::setup() {
         continue;
       }
 
-      // First-level probe: dali.isDevicePresent()
-      if (!::dali.isDevicePresent(short_addr)) {
+      // First-level probe: DaliMaster::isDevicePresent (requires explicit 0xFF)
+      if (!this->dali.isDevicePresent(short_addr)) {
         DALI_LOGD("No device at short address %.2x (no affirmative present reply)", short_addr);
         continue;
       }
 
-      // Confirm via min-level query using library cmd
-      int16_t min_level = ::dali.cmd(DALI_QUERY_MIN_LEVEL, short_addr);
+      // Confirm via min-level query using DaliMaster lamp API
+      int16_t min_level = this->dali.lamp.getMinLevel(short_addr);
       if (min_level < 0 || min_level > 254) {
         DALI_LOGW("Probe at short address %.2x returned invalid min_level=%d - ignoring (likely noise)", short_addr, (int)min_level);
         continue;
@@ -114,18 +114,12 @@ void DaliBusComponent::setup() {
         DALI_LOGW("Duplicate or already-registered short address detected: %.2x", short_addr);
         duplicate_detected = true;
       } else {
-        // Try to read random/long address bytes (C4/C3/C2)
-        int16_t rH = ::dali.cmd(DALI_QUERY_RANDOM_ADDRESS_H, short_addr);
-        int16_t rM = ::dali.cmd(DALI_QUERY_RANDOM_ADDRESS_M, short_addr);
-        int16_t rL = ::dali.cmd(DALI_QUERY_RANDOM_ADDRESS_L, short_addr);
-        uint32_t long_addr = 0;
-        if (rH >= 0 && rM >= 0 && rL >= 0) {
-          long_addr = ((uint32_t)rH << 16) | ((uint32_t)rM << 8) | (uint32_t)rL;
-        }
+        // Try to read the device random/long address via DaliMaster helper (C4/C3/C2)
+        uint32_t long_addr = this->dali.getRandomAddress(short_addr);
 
         m_addresses[short_addr] = (long_addr != 0 ? long_addr : 0xFFFFFF);
 
-        int16_t max_level = ::dali.cmd(DALI_QUERY_MAX_LEVEL, short_addr);
+        int16_t max_level = this->dali.lamp.getMaxLevel(short_addr);
         DALI_LOGI("  short=%.2x long=0x%.6x min=%d max=%d", short_addr, long_addr, (int)min_level, (int)max_level);
 
         create_light_component(short_addr, long_addr);
@@ -150,21 +144,21 @@ void DaliBusComponent::resetBus() {
   if (m_txPin) m_txPin->digital_write(LOW);
 }
 
-// send a forward frame (address + data) using the qqqlab library API (addr+data)
+// send a forward frame (address + data) using the qqqlab low-level library API (addr+data)
 void DaliBusComponent::sendForwardFrame(uint8_t address, uint8_t data) {
   if (m_debug_rxtx) {
-    DALI_LOGD("TX: addr=0x%02x data=0x%02x (via library tx_wait)", address, data);
+    DALI_LOGD("TX: addr=0x%02x data=0x%02x (via low-level library tx_wait)", address, data);
   }
 
-  // Use the library's blocking transmit that takes address+data
-  // The qqqlab library in this repo provides a tx_wait(addr, data, timeout_ms) variant.
+  // Use the low-level driver blocking transmit that takes address+data
+  // DALI_Lib.h defines: bool tx_wait(uint8_t addr, uint8_t data, uint16_t timeout_ms)
   bool ok = ::dali.tx_wait(address, data, 500);
   if (!ok) {
     DALI_LOGW("dali.tx_wait returned failure for addr=0x%02x data=0x%02x", address, data);
   }
 }
 
-// wait for backward frame (reply) using the library's rx() function
+// wait for backward frame (reply) using the low-level library's rx() function
 uint8_t DaliBusComponent::receiveBackwardFrame(unsigned long timeout_ms) {
   unsigned long start = millis();
   uint8_t rxbuf[4];
@@ -227,7 +221,7 @@ void DaliBusComponent::writeByte(uint8_t b) {
 }
 
 uint8_t DaliBusComponent::readByte() {
-  // Deprecated for backward frames - use library's rx()
+  // Deprecated for backward frames - use low-level library's rx()
   uint8_t byte = 0;
   for (int i = 0; i < 8; i++) {
     byte <<= 1;
